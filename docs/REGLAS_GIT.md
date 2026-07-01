@@ -44,3 +44,5 @@ Formato:
 
 ```txt
 tipo/sprint-issue-descripcion
+
+
