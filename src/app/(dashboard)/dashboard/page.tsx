@@ -1,7 +1,4 @@
-import { headers } from "next/headers";
-import { redirect } from "next/navigation";
-
-import { auth } from "@/server/auth/auth";
+import { requireAdminContext } from "@/server/auth/authorization";
 
 import { LogoutButton } from "./logout-button";
 
@@ -9,13 +6,12 @@ import { LogoutButton } from "./logout-button";
 export const dynamic = "force-dynamic";
 
 export default async function DashboardPage() {
-  const session = await auth.api.getSession({ headers: await headers() });
-
-  // Verificación autoritativa en servidor (el middleware solo hace un chequeo
-  // optimista por cookie). Sin sesión -> al login.
-  if (!session) {
-    redirect("/login");
-  }
+  // Contexto autoritativo desde servidor: sesión de Better Auth + usuario real
+  // en BD (activo, admin, con pastelería). El layout del grupo ya exige admin;
+  // aquí reutilizamos el mismo contexto (memoizado por request) para pintar
+  // datos sin confiar en el frontend. `pasteleriaId` sale de la sesión, nunca
+  // del cliente.
+  const admin = await requireAdminContext();
 
   return (
     <main className="mx-auto flex min-h-full w-full max-w-2xl flex-col gap-6 p-6">
@@ -23,7 +19,7 @@ export default async function DashboardPage() {
         <div className="space-y-1">
           <h1 className="text-lg font-semibold">Panel</h1>
           <p className="text-sm text-muted-foreground">
-            Sesión iniciada como {session.user.email}
+            Sesión iniciada como {admin.email}
           </p>
         </div>
         <LogoutButton />
