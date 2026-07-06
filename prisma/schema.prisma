@@ -11,3 +11,131 @@ generator client {
 datasource db {
   provider = "postgresql"
 }
+
+// Sprint 1 — Único rol funcional activo: admin.
+// Nuevos roles deberán agregarse en una migración futura aprobada.
+enum RolUsuario {
+  admin
+
+  @@map("rol_usuario")
+}
+
+// Negocio / tenant. Toda la data de la app se filtra por pasteleria_id.
+model Pasteleria {
+  id         String   @id @default(cuid())
+  nombre     String
+  slug       String   @unique
+  activo     Boolean  @default(true)
+  created_at DateTime @default(now())
+  updated_at DateTime @updatedAt
+
+  usuarios Usuario[]
+  clientes Cliente[]
+
+  @@map("pastelerias")
+}
+
+// Usuario administrador del sistema.
+// Este modelo se usa como modelo de usuario para Better Auth.
+// No existe registro público; el admin se crea por setup/seed interno.
+model Usuario {
+  id             String     @id @default(cuid())
+  pasteleria_id  String
+  email          String     @unique
+  email_verified Boolean    @default(false)
+  nombre         String
+  image          String?
+  rol            RolUsuario @default(admin)
+  activo         Boolean    @default(true)
+  created_at     DateTime   @default(now())
+  updated_at     DateTime   @updatedAt
+
+  pasteleria Pasteleria @relation(fields: [pasteleria_id], references: [id])
+  sessions   Session[]
+  accounts   Account[]
+
+  @@index([pasteleria_id])
+  @@map("usuarios")
+}
+
+// --- Tablas de infraestructura de Better Auth ---
+// Se dejan con los nombres de campo por defecto del core (camelCase) para no
+// introducir una superficie de mapeo frágil; solo la tabla se mapea a plural.
+
+// Sesiones activas emitidas por Better Auth.
+model Session {
+  id        String   @id @default(cuid())
+  expiresAt DateTime
+  token     String   @unique
+  ipAddress String?
+  userAgent String?
+  userId    String
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  user Usuario @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@map("sessions")
+}
+
+// Credenciales/vínculos de proveedor. En Sprint 1 solo se usa el proveedor
+// "credential" (email + password), donde `password` guarda el hash.
+model Account {
+  id                    String    @id @default(cuid())
+  accountId             String
+  providerId            String
+  userId                String
+  accessToken           String?
+  refreshToken          String?
+  idToken               String?
+  accessTokenExpiresAt  DateTime?
+  refreshTokenExpiresAt DateTime?
+  scope                 String?
+  password              String?
+  createdAt             DateTime  @default(now())
+  updatedAt             DateTime  @updatedAt
+
+  user Usuario @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@unique([providerId, accountId])
+  @@map("accounts")
+}
+
+// Tokens de verificación temporales que administra Better Auth internamente.
+model Verification {
+  id         String   @id @default(cuid())
+  identifier String
+  value      String
+  expiresAt  DateTime
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  @@index([identifier])
+  @@map("verifications")
+}
+
+// Clientes de la pastelería. Eliminación lógica vía `activo`.
+model Cliente {
+  id            String   @id @default(cuid())
+  pasteleria_id String
+  nombre        String
+  telefono      String?
+  whatsapp      String?
+  email         String?
+  direccion     String?
+  notas         String?
+  activo        Boolean  @default(true)
+  created_at    DateTime @default(now())
+  updated_at    DateTime @updatedAt
+
+  pasteleria Pasteleria @relation(fields: [pasteleria_id], references: [id])
+
+  // [pasteleria_id, activo] cubre el listado por tenant + soft-delete y, por
+  // prefijo izquierdo, las consultas por pasteleria_id (sin índice redundante).
+  @@index([pasteleria_id, activo])
+  // Búsqueda/orden por nombre dentro del tenant.
+  @@index([pasteleria_id, nombre])
+  @@map("clientes")
+}
