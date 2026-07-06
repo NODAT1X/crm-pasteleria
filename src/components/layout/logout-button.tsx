@@ -19,7 +19,7 @@ export function LogoutButton() {
 
   return (
     <Button variant="outline" onClick={handleLogout} disabled={loading}>
-      {loading ? "Cerrando…" : "Cerrar sesión"}
+      {loading ? "Cerrando..." : "Cerrar sesión"}
     </Button>
   );
 }
