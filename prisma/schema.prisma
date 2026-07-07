@@ -161,7 +161,7 @@ enum EstadoPedido {
 
 // Forma de entrega del pedido.
 enum TipoEntrega {
-  recoger
+  recoleccion
   domicilio
 
   @@map("tipo_entrega")
