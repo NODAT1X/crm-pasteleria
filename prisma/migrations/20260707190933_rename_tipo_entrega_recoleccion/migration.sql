@@ -1,0 +1,1 @@
+ALTER TYPE "tipo_entrega" RENAME VALUE 'recoger' TO 'recoleccion';
