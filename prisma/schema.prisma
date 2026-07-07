@@ -29,8 +29,12 @@ model Pasteleria {
   created_at DateTime @default(now())
   updated_at DateTime @updatedAt
 
-  usuarios Usuario[]
-  clientes Cliente[]
+  usuarios     Usuario[]
+  clientes     Cliente[]
+  pedidos      Pedido[]
+  // Back-reference requerido por la relación PedidoItem -> Pasteleria (Prisma
+  // exige el lado opuesto). El filtrado por tenant se hace por `pasteleria_id`.
+  pedido_items PedidoItem[]
 
   @@map("pastelerias")
 }
@@ -131,6 +135,7 @@ model Cliente {
   updated_at    DateTime @updatedAt
 
   pasteleria Pasteleria @relation(fields: [pasteleria_id], references: [id])
+  pedidos    Pedido[]
 
   // [pasteleria_id, activo] cubre el listado por tenant + soft-delete y, por
   // prefijo izquierdo, las consultas por pasteleria_id (sin índice redundante).
@@ -138,4 +143,83 @@ model Cliente {
   // Búsqueda/orden por nombre dentro del tenant.
   @@index([pasteleria_id, nombre])
   @@map("clientes")
+}
+
+// --- Pedidos (Sprint 2, S2-002) ---
+
+// Estado del ciclo de vida de un pedido. Un pedido inicia como `cotizacion`.
+enum EstadoPedido {
+  cotizacion
+  confirmado
+  en_preparacion
+  listo_para_entregar
+  entregado
+  cancelado
+
+  @@map("estado_pedido")
+}
+
+// Forma de entrega del pedido.
+enum TipoEntrega {
+  recoleccion
+  domicilio
+
+  @@map("tipo_entrega")
+}
+
+// Pedido personalizado de la pastelería. Multi-tenant por `pasteleria_id`.
+// Agrupa uno o varios PedidoItem e inicia su ciclo como cotización.
+model Pedido {
+  id                String       @id @default(cuid())
+  pasteleria_id     String
+  cliente_id        String
+  // El pedido inicia como cotización.
+  estado_pedido     EstadoPedido @default(cotizacion)
+  fecha_entrega     DateTime
+  // Hora en formato "HH:mm"; se modela como texto en el MVP.
+  hora_entrega      String
+  tipo_entrega      TipoEntrega
+  direccion_entrega String?
+  // Dinero: Decimal (nunca Float). El total lo calcula el backend en S2-004.
+  total             Decimal      @default(0) @db.Decimal(10, 2)
+  notas_internas    String?
+  created_at        DateTime     @default(now())
+  updated_at        DateTime     @updatedAt
+
+  pasteleria Pasteleria   @relation(fields: [pasteleria_id], references: [id])
+  cliente    Cliente      @relation(fields: [cliente_id], references: [id])
+  items      PedidoItem[]
+
+  @@index([pasteleria_id])
+  @@index([pasteleria_id, cliente_id])
+  @@index([pasteleria_id, estado_pedido])
+  @@index([pasteleria_id, fecha_entrega])
+  // Apoya vistas por estado filtradas/ordenadas por fecha dentro del tenant.
+  @@index([pasteleria_id, estado_pedido, fecha_entrega])
+  @@map("pedidos")
+}
+
+// Renglón de un Pedido. Guarda un snapshot del nombre, la descripción y el
+// precio del item al momento del pedido (no depende de un catálogo vivo).
+model PedidoItem {
+  id              String  @id @default(cuid())
+  pasteleria_id   String
+  pedido_id       String
+  // Preparado para un catálogo futuro: sin FK ni relación en Sprint 2.
+  producto_id     String?
+  nombre_snapshot String
+  descripcion     String?
+  cantidad        Int
+  // Dinero: Decimal (nunca Float). El subtotal lo calcula el backend en S2-004.
+  precio_unitario Decimal @db.Decimal(10, 2)
+  subtotal        Decimal @db.Decimal(10, 2)
+
+  pasteleria Pasteleria @relation(fields: [pasteleria_id], references: [id])
+  pedido     Pedido     @relation(fields: [pedido_id], references: [id])
+
+  @@index([pasteleria_id])
+  @@index([pedido_id])
+  @@index([pasteleria_id, pedido_id])
+  @@index([producto_id])
+  @@map("pedido_items")
 }
