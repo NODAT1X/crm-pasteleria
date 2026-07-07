@@ -3,6 +3,8 @@ import Link from "next/link";
 import { Button } from "@/components/ui/button";
 import { getClienteByIdAction } from "@/modules/clientes/actions";
 
+import { DesactivarClienteButton } from "../_components/desactivar-cliente-button";
+
 export const dynamic = "force-dynamic";
 
 type ClienteDetallePageProps = {
@@ -121,6 +123,20 @@ export default async function ClienteDetallePage({
               Estado actual del registro dentro del CRM.
             </p>
           </div>
+
+          {cliente.activo ? (
+            <div className="mt-4 space-y-3 border-t pt-4">
+              <p className="text-sm text-muted-foreground">
+                Al desactivar, el cliente dejará de aparecer en el listado
+                principal. No se elimina el registro: su información se conserva.
+              </p>
+
+              <DesactivarClienteButton
+                clienteId={cliente.id}
+                clienteNombre={cliente.nombre}
+              />
+            </div>
+          ) : null}
         </aside>
       </div>
 
