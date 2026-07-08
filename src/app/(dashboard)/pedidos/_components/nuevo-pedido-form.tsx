@@ -4,6 +4,7 @@ import { useMemo, useState, type FormEvent } from "react";
 import Link from "next/link";
 
 import { Button } from "@/components/ui/button";
+import { createPedidoAction } from "@/modules/pedidos/actions";
 
 type ClienteOption = {
   id: string;
@@ -18,6 +19,86 @@ type NuevoPedidoFormProps = {
 
 type TipoEntrega = "recoleccion" | "domicilio";
 
+type PedidoItemForm = {
+  id: string;
+  nombre_snapshot: string;
+  descripcion: string;
+  cantidad: string;
+  precio_unitario: string;
+};
+
+/**
+ * Errores por campo de cada item.
+ * Sirve para mostrar el mensaje debajo del campo exacto que está mal.
+ */
+type ItemFieldErrors = {
+  nombre_snapshot?: string;
+  cantidad?: string;
+  precio_unitario?: string;
+};
+
+/**
+ * Errores generales del formulario.
+ * Cliente, fecha y hora tienen su propio error.
+ * Los items tienen errores agrupados por id.
+ */
+type FieldErrors = {
+  clienteId?: string;
+  fechaEntrega?: string;
+  horaEntrega?: string;
+  itemsRequired?: string;
+  itemErrors?: Record<string, ItemFieldErrors>;
+};
+
+/**
+ * Crea un item vacío para el formulario.
+ * Se inicia con cantidad 1 para facilitar la captura.
+ */
+function createEmptyItem(id: string): PedidoItemForm {
+  return {
+    id,
+    nombre_snapshot: "",
+    descripcion: "",
+    cantidad: "1",
+    precio_unitario: "",
+  };
+}
+
+/**
+ * Genera ids temporales para los items en frontend.
+ * No se guardan en base de datos; solo sirven para renderizar la lista.
+ */
+function createItemId() {
+  return `item-${crypto.randomUUID()}`;
+}
+
+/**
+ * Convierte el texto del input a número.
+ * Si el valor no es válido, lo tratamos como 0 para calcular sin romper la UI.
+ */
+function toNumber(value: string): number {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : 0;
+}
+
+/**
+ * Redondea montos a 2 decimales.
+ * Evita resultados raros por operaciones con decimales en JavaScript.
+ */
+function roundMoney(value: number): number {
+  return Math.round(value * 100) / 100;
+}
+
+/**
+ * Muestra montos en formato moneda MXN.
+ */
+function formatMoney(value: number): string {
+  return value.toLocaleString("es-MX", {
+    style: "currency",
+    currency: "MXN",
+  });
+}
+
 export function NuevoPedidoForm({ clientes }: NuevoPedidoFormProps) {
   const [clienteId, setClienteId] = useState("");
   const [clienteSearch, setClienteSearch] = useState("");
@@ -26,9 +107,34 @@ export function NuevoPedidoForm({ clientes }: NuevoPedidoFormProps) {
   const [tipoEntrega, setTipoEntrega] = useState<TipoEntrega>("recoleccion");
   const [direccionEntrega, setDireccionEntrega] = useState("");
   const [notasInternas, setNotasInternas] = useState("");
-  const [error, setError] = useState<string | null>(null);
-  const [successMessage, setSuccessMessage] = useState<string | null>(null);
 
+  /**
+   * Items dinámicos del pedido.
+   * Esta parte corresponde a S2-006.
+   */
+  const [items, setItems] = useState<PedidoItemForm[]>([
+    createEmptyItem("item-1"),
+  ]);
+
+  /**
+   * Error de servidor.
+   * Se usa solo cuando el backend rechaza el guardado.
+   */
+  const [error, setError] = useState<string | null>(null);
+
+  /**
+   * Errores por campo.
+   * Se muestran debajo de cada input para que el dueño sepa qué corregir.
+   */
+  const [fieldErrors, setFieldErrors] = useState<FieldErrors>({});
+
+  const [successMessage, setSuccessMessage] = useState<string | null>(null);
+  const [isSaving, setIsSaving] = useState(false);
+
+  /**
+   * Buscador simple de clientes activos.
+   * Filtra por nombre, teléfono o WhatsApp.
+   */
   const clientesFiltrados = useMemo(() => {
     const query = clienteSearch.trim().toLowerCase();
 
@@ -47,35 +153,237 @@ export function NuevoPedidoForm({ clientes }: NuevoPedidoFormProps) {
     });
   }, [clienteSearch, clientes]);
 
-  function handleSubmit(event: FormEvent<HTMLFormElement>) {
-  event.preventDefault();
+  /**
+   * Calcula subtotal por item.
+   * subtotal = cantidad * precio_unitario
+   */
+  const itemsCalculados = useMemo(() => {
+    return items.map((item) => {
+      const cantidad = toNumber(item.cantidad);
+      const precioUnitario = toNumber(item.precio_unitario);
+      const subtotal = roundMoney(cantidad * precioUnitario);
 
-  setError(null);
-  setSuccessMessage(null);
+      return {
+        ...item,
+        cantidadNumber: cantidad,
+        precioUnitarioNumber: precioUnitario,
+        subtotal,
+      };
+    });
+  }, [items]);
 
-  const errors: string[] = [];
+  /**
+   * Calcula el total del pedido como suma de subtotales.
+   */
+  const total = useMemo(() => {
+    return roundMoney(
+      itemsCalculados.reduce((sum, item) => sum + item.subtotal, 0),
+    );
+  }, [itemsCalculados]);
 
-  if (!clienteId) {
-    errors.push("Selecciona un cliente activo para iniciar el pedido.");
+  /**
+   * Limpia el error de un campo general cuando el usuario lo corrige.
+   */
+  function clearFieldError(
+    field: "clienteId" | "fechaEntrega" | "horaEntrega",
+  ) {
+    setFieldErrors((currentErrors) => ({
+      ...currentErrors,
+      [field]: undefined,
+    }));
   }
 
-  if (!fechaEntrega) {
-    errors.push("La fecha de entrega es obligatoria.");
+  /**
+   * Limpia el error de un campo específico de un item.
+   */
+  function clearItemFieldError(itemId: string, field: keyof ItemFieldErrors) {
+    setFieldErrors((currentErrors) => {
+      const itemErrors = currentErrors.itemErrors?.[itemId];
+
+      if (!itemErrors?.[field]) {
+        return currentErrors;
+      }
+
+      const nextItemErrors = { ...(currentErrors.itemErrors ?? {}) };
+      const nextErrorsForItem = {
+        ...itemErrors,
+        [field]: undefined,
+      };
+
+      const hasErrorsForItem = Object.values(nextErrorsForItem).some(Boolean);
+
+      if (hasErrorsForItem) {
+        nextItemErrors[itemId] = nextErrorsForItem;
+      } else {
+        delete nextItemErrors[itemId];
+      }
+
+      return {
+        ...currentErrors,
+        itemErrors: nextItemErrors,
+      };
+    });
   }
 
-  if (!horaEntrega) {
-    errors.push("La hora de entrega es obligatoria.");
+  /**
+   * Actualiza un campo de un item.
+   * Si ese campo tenía error, se limpia al editarlo.
+   */
+  function updateItem(
+    itemId: string,
+    field: keyof PedidoItemForm,
+    value: string,
+  ) {
+    setItems((currentItems) =>
+      currentItems.map((item) =>
+        item.id === itemId ? { ...item, [field]: value } : item,
+      ),
+    );
+
+    if (
+      field === "nombre_snapshot" ||
+      field === "cantidad" ||
+      field === "precio_unitario"
+    ) {
+      clearItemFieldError(itemId, field);
+    }
   }
 
-  if (errors.length > 0) {
-    setError(errors.join(" "));
-    return;
+  /**
+   * Agrega un nuevo item al pedido antes de guardar.
+   */
+  function addItem() {
+    setItems((currentItems) => [
+      ...currentItems,
+      createEmptyItem(createItemId()),
+    ]);
+
+    setFieldErrors((currentErrors) => ({
+      ...currentErrors,
+      itemsRequired: undefined,
+    }));
   }
 
-  setSuccessMessage(
-    "Datos base validados. Los productos del pedido se agregarán en la siguiente tarea.",
-  );
-}
+  /**
+   * Quita un item del pedido antes de guardar.
+   */
+  function removeItem(itemId: string) {
+    setItems((currentItems) =>
+      currentItems.filter((item) => item.id !== itemId),
+    );
+
+    setFieldErrors((currentErrors) => {
+      const nextItemErrors = { ...(currentErrors.itemErrors ?? {}) };
+      delete nextItemErrors[itemId];
+
+      return {
+        ...currentErrors,
+        itemErrors: nextItemErrors,
+      };
+    });
+  }
+
+  /**
+   * Valida el formulario completo.
+   * Si hay errores, los muestra debajo de cada campo y no guarda nada.
+   * Si todo está correcto, llama al backend para crear el pedido.
+   */
+  async function handleSubmit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+
+    setError(null);
+    setFieldErrors({});
+    setSuccessMessage(null);
+
+    const nextFieldErrors: FieldErrors = {};
+    const nextItemErrors: Record<string, ItemFieldErrors> = {};
+
+    if (!clienteId) {
+      nextFieldErrors.clienteId = "Selecciona un cliente activo.";
+    }
+
+    if (!fechaEntrega) {
+      nextFieldErrors.fechaEntrega = "La fecha de entrega es obligatoria.";
+    }
+
+    if (!horaEntrega) {
+      nextFieldErrors.horaEntrega = "La hora de entrega es obligatoria.";
+    }
+
+    if (items.length === 0) {
+      nextFieldErrors.itemsRequired = "Agrega al menos un item al pedido.";
+    }
+
+    itemsCalculados.forEach((item) => {
+      const errorsForItem: ItemFieldErrors = {};
+
+      if (!item.nombre_snapshot.trim()) {
+        errorsForItem.nombre_snapshot = "El nombre del item es obligatorio.";
+      }
+
+      if (!item.cantidad || item.cantidadNumber <= 0) {
+        errorsForItem.cantidad = "La cantidad debe ser mayor a 0.";
+      } else if (!Number.isInteger(item.cantidadNumber)) {
+        errorsForItem.cantidad = "La cantidad debe ser un número entero.";
+      }
+
+      if (!item.precio_unitario) {
+        errorsForItem.precio_unitario = "El precio unitario es obligatorio.";
+      } else if (item.precioUnitarioNumber < 0) {
+        errorsForItem.precio_unitario = "El precio unitario no puede ser negativo.";
+      }
+
+      if (Object.keys(errorsForItem).length > 0) {
+        nextItemErrors[item.id] = errorsForItem;
+      }
+    });
+
+    if (Object.keys(nextItemErrors).length > 0) {
+      nextFieldErrors.itemErrors = nextItemErrors;
+    }
+
+    const hasErrors =
+      Boolean(nextFieldErrors.clienteId) ||
+      Boolean(nextFieldErrors.fechaEntrega) ||
+      Boolean(nextFieldErrors.horaEntrega) ||
+      Boolean(nextFieldErrors.itemsRequired) ||
+      Boolean(nextFieldErrors.itemErrors);
+
+    if (hasErrors) {
+      setFieldErrors(nextFieldErrors);
+      return;
+    }
+
+    setIsSaving(true);
+
+    const result = await createPedidoAction({
+      cliente_id: clienteId,
+      fecha_entrega: fechaEntrega,
+      hora_entrega: horaEntrega,
+      tipo_entrega: tipoEntrega,
+      direccion_entrega:
+        tipoEntrega === "domicilio" ? direccionEntrega : null,
+      notas_internas: notasInternas,
+      total,
+      items: itemsCalculados.map((item) => ({
+        producto_id: null,
+        nombre_snapshot: item.nombre_snapshot,
+        descripcion: item.descripcion,
+        cantidad: item.cantidadNumber,
+        precio_unitario: item.precioUnitarioNumber,
+        subtotal: item.subtotal,
+      })),
+    });
+
+    setIsSaving(false);
+
+    if (!result.ok) {
+      setError(result.error);
+      return;
+    }
+
+    setSuccessMessage("Pedido guardado correctamente.");
+  }
 
   return (
     <form
@@ -85,8 +393,7 @@ export function NuevoPedidoForm({ clientes }: NuevoPedidoFormProps) {
       <div className="space-y-1">
         <h3 className="font-medium">Datos base del pedido</h3>
         <p className="text-sm text-muted-foreground">
-          Captura cliente, fecha, hora y datos de entrega. Productos, pagos,
-          WhatsApp y calendario quedan fuera de esta tarea.
+          Captura cliente, entrega e items del pedido personalizado.
         </p>
       </div>
 
@@ -125,7 +432,10 @@ export function NuevoPedidoForm({ clientes }: NuevoPedidoFormProps) {
           <select
             id="clienteId"
             value={clienteId}
-            onChange={(event) => setClienteId(event.target.value)}
+            onChange={(event) => {
+              setClienteId(event.target.value);
+              clearFieldError("clienteId");
+            }}
             className="h-9 w-full rounded-lg border border-input bg-background px-3 text-sm outline-none transition-colors focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50"
           >
             <option value="">Selecciona un cliente</option>
@@ -136,6 +446,12 @@ export function NuevoPedidoForm({ clientes }: NuevoPedidoFormProps) {
               </option>
             ))}
           </select>
+
+          {fieldErrors.clienteId ? (
+            <p className="text-sm text-destructive">
+              {fieldErrors.clienteId}
+            </p>
+          ) : null}
 
           {clientes.length === 0 ? (
             <p className="text-sm text-muted-foreground">
@@ -166,9 +482,18 @@ export function NuevoPedidoForm({ clientes }: NuevoPedidoFormProps) {
             id="fechaEntrega"
             type="date"
             value={fechaEntrega}
-            onChange={(event) => setFechaEntrega(event.target.value)}
+            onChange={(event) => {
+              setFechaEntrega(event.target.value);
+              clearFieldError("fechaEntrega");
+            }}
             className="h-9 w-full rounded-lg border border-input bg-background px-3 text-sm outline-none transition-colors focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50"
           />
+
+          {fieldErrors.fechaEntrega ? (
+            <p className="text-sm text-destructive">
+              {fieldErrors.fechaEntrega}
+            </p>
+          ) : null}
         </div>
 
         <div className="space-y-2">
@@ -179,9 +504,18 @@ export function NuevoPedidoForm({ clientes }: NuevoPedidoFormProps) {
             id="horaEntrega"
             type="time"
             value={horaEntrega}
-            onChange={(event) => setHoraEntrega(event.target.value)}
+            onChange={(event) => {
+              setHoraEntrega(event.target.value);
+              clearFieldError("horaEntrega");
+            }}
             className="h-9 w-full rounded-lg border border-input bg-background px-3 text-sm outline-none transition-colors focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50"
           />
+
+          {fieldErrors.horaEntrega ? (
+            <p className="text-sm text-destructive">
+              {fieldErrors.horaEntrega}
+            </p>
+          ) : null}
         </div>
 
         <div className="space-y-2 md:col-span-2">
@@ -234,12 +568,177 @@ export function NuevoPedidoForm({ clientes }: NuevoPedidoFormProps) {
         </div>
       </div>
 
+      <div className="space-y-4 rounded-lg border p-4">
+        <div className="flex flex-col gap-2 md:flex-row md:items-center md:justify-between">
+          <div>
+            <h3 className="font-medium">Items del pedido</h3>
+            <p className="text-sm text-muted-foreground">
+              Agrega uno o más conceptos. El total se calcula desde los
+              subtotales.
+            </p>
+          </div>
+
+          <Button type="button" variant="outline" onClick={addItem}>
+            Agregar item
+          </Button>
+        </div>
+
+        {itemsCalculados.length === 0 ? (
+          <div className="rounded-lg border bg-muted/30 p-4 text-sm text-muted-foreground">
+            Agrega al menos un item para poder guardar el pedido.
+          </div>
+        ) : null}
+
+        {fieldErrors.itemsRequired ? (
+          <p className="text-sm text-destructive">
+            {fieldErrors.itemsRequired}
+          </p>
+        ) : null}
+
+        <div className="space-y-4">
+          {itemsCalculados.map((item, index) => (
+            <div key={item.id} className="rounded-lg border p-4">
+              <div className="mb-4 flex items-center justify-between gap-2">
+                <h4 className="text-sm font-medium">Item {index + 1}</h4>
+
+                <Button
+                  type="button"
+                  variant="outline"
+                  onClick={() => removeItem(item.id)}
+                >
+                  Quitar
+                </Button>
+              </div>
+
+              <div className="grid gap-4 md:grid-cols-2">
+                <div className="space-y-2 md:col-span-2">
+                  <label
+                    htmlFor={`nombre-${item.id}`}
+                    className="text-sm font-medium"
+                  >
+                    Producto o concepto{" "}
+                    <span className="text-destructive">*</span>
+                  </label>
+                  <input
+                    id={`nombre-${item.id}`}
+                    type="text"
+                    value={item.nombre_snapshot}
+                    onChange={(event) =>
+                      updateItem(
+                        item.id,
+                        "nombre_snapshot",
+                        event.target.value,
+                      )
+                    }
+                    placeholder="Ej. Pastel personalizado"
+                    className="h-9 w-full rounded-lg border border-input bg-background px-3 text-sm outline-none transition-colors placeholder:text-muted-foreground focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50"
+                  />
+
+                  {fieldErrors.itemErrors?.[item.id]?.nombre_snapshot ? (
+                    <p className="text-sm text-destructive">
+                      {fieldErrors.itemErrors[item.id]?.nombre_snapshot}
+                    </p>
+                  ) : null}
+                </div>
+
+                <div className="space-y-2 md:col-span-2">
+                  <label
+                    htmlFor={`descripcion-${item.id}`}
+                    className="text-sm font-medium"
+                  >
+                    Descripción
+                  </label>
+                  <textarea
+                    id={`descripcion-${item.id}`}
+                    value={item.descripcion}
+                    onChange={(event) =>
+                      updateItem(item.id, "descripcion", event.target.value)
+                    }
+                    placeholder="Detalle opcional del item"
+                    rows={2}
+                    className="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm outline-none transition-colors placeholder:text-muted-foreground focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50"
+                  />
+                </div>
+
+                <div className="space-y-2">
+                  <label
+                    htmlFor={`cantidad-${item.id}`}
+                    className="text-sm font-medium"
+                  >
+                    Cantidad <span className="text-destructive">*</span>
+                  </label>
+                  <input
+                    id={`cantidad-${item.id}`}
+                    type="number"
+                    min="1"
+                    step="1"
+                    value={item.cantidad}
+                    onChange={(event) =>
+                      updateItem(item.id, "cantidad", event.target.value)
+                    }
+                    className="h-9 w-full rounded-lg border border-input bg-background px-3 text-sm outline-none transition-colors focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50"
+                  />
+
+                  {fieldErrors.itemErrors?.[item.id]?.cantidad ? (
+                    <p className="text-sm text-destructive">
+                      {fieldErrors.itemErrors[item.id]?.cantidad}
+                    </p>
+                  ) : null}
+                </div>
+
+                <div className="space-y-2">
+                  <label
+                    htmlFor={`precio-${item.id}`}
+                    className="text-sm font-medium"
+                  >
+                    Precio unitario <span className="text-destructive">*</span>
+                  </label>
+                  <input
+                    id={`precio-${item.id}`}
+                    type="number"
+                    min="0"
+                    step="0.01"
+                    value={item.precio_unitario}
+                    onChange={(event) =>
+                      updateItem(item.id, "precio_unitario", event.target.value)
+                    }
+                    className="h-9 w-full rounded-lg border border-input bg-background px-3 text-sm outline-none transition-colors focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50"
+                  />
+
+                  {fieldErrors.itemErrors?.[item.id]?.precio_unitario ? (
+                    <p className="text-sm text-destructive">
+                      {fieldErrors.itemErrors[item.id]?.precio_unitario}
+                    </p>
+                  ) : null}
+                </div>
+
+                <div className="space-y-1 md:col-span-2">
+                  <p className="text-sm font-medium">Subtotal</p>
+                  <p className="text-sm text-muted-foreground">
+                    {formatMoney(item.subtotal)}
+                  </p>
+                </div>
+              </div>
+            </div>
+          ))}
+        </div>
+
+        <div className="flex justify-end border-t pt-4">
+          <div className="text-right">
+            <p className="text-sm text-muted-foreground">Total del pedido</p>
+            <p className="text-xl font-semibold">{formatMoney(total)}</p>
+          </div>
+        </div>
+      </div>
+
       <div className="flex flex-col-reverse gap-2 md:flex-row md:justify-end">
         <Button asChild type="button" variant="outline">
           <Link href="/clientes">Cancelar</Link>
         </Button>
 
-        <Button type="submit">Validar datos base</Button>
+        <Button type="submit" disabled={isSaving}>
+          {isSaving ? "Guardando..." : "Guardar pedido"}
+        </Button>
       </div>
     </form>
   );
