@@ -1,6 +1,7 @@
 import { z } from "zod";
 
 import type { Cliente } from "@/generated/prisma/client";
+import { EstadoPedido } from "@/generated/prisma/enums";
 import { findClienteById } from "@/server/repositories/clientes.repository";
 import {
   createPedidoWithItems,
@@ -289,6 +290,24 @@ export async function updatePedidoService(
   }
 
   const data = parsed.data;
+
+    // Regla S2-009: los pedidos en estado final no se pueden editar.
+  const actual = await findPedidoEstado({ pasteleriaId, id: parsedId.data });
+
+  if (!actual) {
+    throw new PedidoServiceError(
+      "El pedido no existe o no pertenece a tu pastelería.",
+    );
+  }
+
+  if (
+    actual.estado_pedido === EstadoPedido.entregado ||
+    actual.estado_pedido === EstadoPedido.cancelado
+  ) {
+    throw new PedidoServiceError(
+      "El pedido ya está entregado o cancelado y no admite edición.",
+    );
+  }
 
   // Si cambia el cliente, el nuevo debe existir, ser del tenant y estar activo.
   if (data.cliente_id !== undefined) {

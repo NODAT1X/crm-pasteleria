@@ -41,9 +41,14 @@ function toErrorMessage(error: unknown): string {
 }
 
 // Revalida las rutas útiles tras una mutación (aún sin UI en esta issue).
-function revalidatePedidoPaths(clienteId?: string): void {
+function revalidatePedidoPaths(clienteId?: string, pedidoId?: string): void {
   revalidatePath(PEDIDOS_PATH);
   revalidatePath(DASHBOARD_PATH);
+
+  if (pedidoId) {
+    revalidatePath(`/pedidos/${pedidoId}`);
+  }
+
   if (clienteId) {
     revalidatePath(`/clientes/${clienteId}`);
   }
@@ -56,7 +61,7 @@ export async function createPedidoAction(
 
   try {
     const pedido = await createPedidoService(pasteleriaId, input);
-    revalidatePedidoPaths(pedido.cliente_id);
+    revalidatePedidoPaths(pedido.cliente_id, pedido.id);
     return { ok: true, data: pedido };
   } catch (error) {
     return { ok: false, error: toErrorMessage(error) };
@@ -97,7 +102,7 @@ export async function updatePedidoAction(
 
   try {
     const pedido = await updatePedidoService(pasteleriaId, id, input);
-    revalidatePedidoPaths(pedido.cliente_id);
+    revalidatePedidoPaths(pedido.cliente_id, pedido.id);
     return { ok: true, data: pedido };
   } catch (error) {
     return { ok: false, error: toErrorMessage(error) };
@@ -111,7 +116,7 @@ export async function changeEstadoPedidoAction(
 
   try {
     const pedido = await changeEstadoPedidoService(pasteleriaId, input);
-    revalidatePedidoPaths(pedido.cliente_id);
+    revalidatePedidoPaths(pedido.cliente_id, pedido.id);
     return { ok: true, data: pedido };
   } catch (error) {
     return { ok: false, error: toErrorMessage(error) };
