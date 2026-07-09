@@ -3,6 +3,8 @@ import Link from "next/link";
 import { Button } from "@/components/ui/button";
 import { getPedidoByIdAction } from "@/modules/pedidos/actions";
 
+import { CambiarEstadoPedido } from "../_components/cambiar-estado-pedido";
+
 export const dynamic = "force-dynamic";
 
 type PedidoDetallePageProps = {
@@ -27,11 +29,6 @@ const TIPO_ENTREGA_LABEL: Record<string, string> = {
   recoleccion: "Recolección",
   domicilio: "Domicilio",
 };
-
-/**
- * Estados finales: ya no deberían mostrar acción de cambio de estado.
- */
-const ESTADOS_FINALES = ["entregado", "cancelado"];
 
 /**
  * Formatea fecha de entrega en formato mexicano.
@@ -89,7 +86,6 @@ export default async function PedidoDetallePage({
   }
 
   const pedido = result.data;
-  const puedeCambiarEstado = !ESTADOS_FINALES.includes(pedido.estado_pedido);
 
   return (
     <section className="space-y-6">
@@ -113,12 +109,6 @@ export default async function PedidoDetallePage({
           <Button asChild variant="outline">
             <Link href={`/pedidos/${pedido.id}/editar`}>Editar pedido</Link>
           </Button>
-
-          {puedeCambiarEstado ? (
-            <Button type="button" variant="outline" disabled>
-              Cambiar estado
-            </Button>
-          ) : null}
         </div>
       </div>
 
@@ -151,6 +141,14 @@ export default async function PedidoDetallePage({
             <p className="mt-1 text-sm text-muted-foreground">
               Estado operativo actual del pedido.
             </p>
+          </div>
+
+          <div className="mt-4 space-y-2">
+            <p className="text-sm font-medium">Cambiar estado</p>
+            <CambiarEstadoPedido
+              pedidoId={pedido.id}
+              estadoActual={pedido.estado_pedido}
+            />
           </div>
         </aside>
       </div>
