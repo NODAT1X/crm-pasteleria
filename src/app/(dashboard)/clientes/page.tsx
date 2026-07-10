@@ -3,6 +3,8 @@ import Link from "next/link";
 import { Button } from "@/components/ui/button";
 import { listClientesAction } from "@/modules/clientes/actions";
 
+import { ClientesSearchInput } from "./_components/clientes-search-input";
+
 export const dynamic = "force-dynamic";
 
 type ClientesPageProps = {
@@ -39,34 +41,7 @@ export default async function ClientesPage({ searchParams }: ClientesPageProps) 
       </div>
 
       <div className="rounded-lg border bg-background p-6 shadow-sm">
-        <form className="flex flex-col gap-3 md:flex-row" action="/clientes">
-          <div className="flex-1">
-            <label
-              htmlFor="q"
-              className="mb-2 block text-sm font-medium text-foreground"
-            >
-              Buscar cliente
-            </label>
-            <input
-              id="q"
-              name="q"
-              type="search"
-              defaultValue={query}
-              placeholder="Buscar por nombre o teléfono"
-              className="h-9 w-full rounded-lg border border-input bg-background px-3 text-sm outline-none transition-colors placeholder:text-muted-foreground focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50"
-            />
-          </div>
-
-          <div className="flex items-end gap-2">
-            <Button type="submit">Buscar</Button>
-
-            {query ? (
-              <Button asChild variant="outline">
-                <Link href="/clientes">Limpiar</Link>
-              </Button>
-            ) : null}
-          </div>
-        </form>
+        <ClientesSearchInput initialQuery={query} />
       </div>
 
       {result.ok ? null : (

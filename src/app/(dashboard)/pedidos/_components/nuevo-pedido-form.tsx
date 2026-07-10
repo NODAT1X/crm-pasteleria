@@ -10,12 +10,10 @@ import {
   updatePedidoAction,
 } from "@/modules/pedidos/actions";
 
-type ClienteOption = {
-  id: string;
-  nombre: string;
-  telefono: string | null;
-  whatsapp: string | null;
-};
+import {
+  ClienteActivoSelector,
+  type ClienteOption,
+} from "./cliente-activo-selector";
 
 type TipoEntrega = "recoleccion" | "domicilio";
 
@@ -142,8 +140,15 @@ export function NuevoPedidoForm({
   const router = useRouter();
   const isEditMode = mode === "edit";
 
-  const [clienteId, setClienteId] = useState(initialData?.cliente.id ?? "");
-  const [clienteSearch, setClienteSearch] = useState("");
+  /**
+   * Cliente seleccionado (fuente de verdad del cliente del pedido). El
+   * `cliente_id` que se envía al backend se deriva de aquí. En edición el
+   * cliente no se cambia, pero se conserva para mostrarlo.
+   */
+  const [selectedCliente, setSelectedCliente] = useState<ClienteOption | null>(
+    initialData?.cliente ?? null,
+  );
+  const clienteId = selectedCliente?.id ?? "";
   const [fechaEntrega, setFechaEntrega] = useState(
     initialData?.fecha_entrega ?? "",
   );
@@ -182,28 +187,6 @@ export function NuevoPedidoForm({
 
   const [successMessage, setSuccessMessage] = useState<string | null>(null);
   const [isSaving, setIsSaving] = useState(false);
-
-  /**
-   * Buscador simple de clientes activos para modo creación.
-   * En edición no se cambia el cliente porque no está en el alcance.
-   */
-  const clientesFiltrados = useMemo(() => {
-    const query = clienteSearch.trim().toLowerCase();
-
-    if (!query) return clientes;
-
-    return clientes.filter((cliente) => {
-      const nombre = cliente.nombre.toLowerCase();
-      const telefono = cliente.telefono ?? "";
-      const whatsapp = cliente.whatsapp ?? "";
-
-      return (
-        nombre.includes(query) ||
-        telefono.includes(query) ||
-        whatsapp.includes(query)
-      );
-    });
-  }, [clienteSearch, clientes]);
 
   /**
    * Calcula subtotal por item.
@@ -468,69 +451,17 @@ export function NuevoPedidoForm({
       ) : null}
 
       {!isEditMode ? (
-        <div className="space-y-4">
-          <div className="space-y-2">
-            <label htmlFor="clienteSearch" className="text-sm font-medium">
-              Buscar cliente activo
-            </label>
-            <input
-              id="clienteSearch"
-              type="search"
-              value={clienteSearch}
-              onChange={(event) => setClienteSearch(event.target.value)}
-              placeholder="Buscar por nombre, teléfono o WhatsApp"
-              className="h-9 w-full rounded-lg border border-input bg-background px-3 text-sm outline-none transition-colors placeholder:text-muted-foreground focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50"
-            />
-          </div>
-
-          <div className="space-y-2">
-            <label htmlFor="clienteId" className="text-sm font-medium">
-              Cliente <span className="text-destructive">*</span>
-            </label>
-
-            <select
-              id="clienteId"
-              value={clienteId}
-              onChange={(event) => {
-                setClienteId(event.target.value);
-                clearFieldError("clienteId");
-              }}
-              className="h-9 w-full rounded-lg border border-input bg-background px-3 text-sm outline-none transition-colors focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50"
-            >
-              <option value="">Selecciona un cliente</option>
-              {clientesFiltrados.map((cliente) => (
-                <option key={cliente.id} value={cliente.id}>
-                  {cliente.nombre}
-                  {cliente.telefono ? ` — ${cliente.telefono}` : ""}
-                </option>
-              ))}
-            </select>
-
-            {fieldErrors.clienteId ? (
-              <p className="text-sm text-destructive">
-                {fieldErrors.clienteId}
-              </p>
-            ) : null}
-
-            {clientes.length === 0 ? (
-              <p className="text-sm text-muted-foreground">
-                No hay clientes activos disponibles.{" "}
-                <Link href="/clientes/nuevo" className="font-medium underline">
-                  Crear cliente
-                </Link>
-              </p>
-            ) : null}
-
-            {clientes.length > 0 && clientesFiltrados.length === 0 ? (
-              <p className="text-sm text-muted-foreground">
-                No se encontró un cliente con esa búsqueda.{" "}
-                <Link href="/clientes/nuevo" className="font-medium underline">
-                  Crear cliente
-                </Link>
-              </p>
-            ) : null}
-          </div>
-        </div>
+        <ClienteActivoSelector
+          clientesIniciales={clientes}
+          value={selectedCliente}
+          onChange={(cliente) => {
+            setSelectedCliente(cliente);
+            if (cliente) {
+              clearFieldError("clienteId");
+            }
+          }}
+          error={fieldErrors.clienteId}
+        />
       ) : (
         <div className="rounded-lg border bg-muted/30 p-4">
           <p className="text-sm font-medium">Cliente asociado</p>
