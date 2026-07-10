@@ -44,9 +44,14 @@ export default async function DashboardLayout({
               <Link href="/dashboard">Inicio</Link>
             </Button>
 
-            <Button asChild variant="ghost">
-              <Link href="/clientes">Clientes</Link>
-            </Button>
+          <Button asChild variant="ghost">
+            <Link href="/clientes">Clientes</Link>
+          </Button>
+
+          {/* Acceso interno al listado básico de pedidos agregado en S2-007. */}
+          <Button asChild variant="ghost">
+            <Link href="/pedidos">Pedidos</Link>
+          </Button>
 
             <LogoutButton />
           </nav>

@@ -2,19 +2,19 @@
 
 import { useMemo, useState, type FormEvent } from "react";
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 
 import { Button } from "@/components/ui/button";
-import { createPedidoAction } from "@/modules/pedidos/actions";
+import {
+  createPedidoAction,
+  updatePedidoAction,
+} from "@/modules/pedidos/actions";
 
 type ClienteOption = {
   id: string;
   nombre: string;
   telefono: string | null;
   whatsapp: string | null;
-};
-
-type NuevoPedidoFormProps = {
-  clientes: ClienteOption[];
 };
 
 type TipoEntrega = "recoleccion" | "domicilio";
@@ -27,9 +27,31 @@ type PedidoItemForm = {
   precio_unitario: string;
 };
 
+type PedidoFormInitialData = {
+  cliente: ClienteOption;
+  fecha_entrega: string;
+  hora_entrega: string;
+  tipo_entrega: TipoEntrega;
+  direccion_entrega: string | null;
+  notas_internas: string | null;
+  items: {
+    nombre_snapshot: string;
+    descripcion: string | null;
+    cantidad: number;
+    precio_unitario: number;
+  }[];
+};
+
+type NuevoPedidoFormProps = {
+  mode?: "create" | "edit";
+  clientes?: ClienteOption[];
+  pedidoId?: string;
+  initialData?: PedidoFormInitialData;
+};
+
 /**
  * Errores por campo de cada item.
- * Sirve para mostrar el mensaje debajo del campo exacto que está mal.
+ * Se usan para mostrar el mensaje debajo del input exacto que debe corregirse.
  */
 type ItemFieldErrors = {
   nombre_snapshot?: string;
@@ -39,8 +61,7 @@ type ItemFieldErrors = {
 
 /**
  * Errores generales del formulario.
- * Cliente, fecha y hora tienen su propio error.
- * Los items tienen errores agrupados por id.
+ * Cliente, fecha y hora tienen error propio; los items se agrupan por id.
  */
 type FieldErrors = {
   clienteId?: string;
@@ -51,8 +72,7 @@ type FieldErrors = {
 };
 
 /**
- * Crea un item vacío para el formulario.
- * Se inicia con cantidad 1 para facilitar la captura.
+ * Crea un item vacío para nuevo pedido o para agregar items en edición.
  */
 function createEmptyItem(id: string): PedidoItemForm {
   return {
@@ -65,16 +85,14 @@ function createEmptyItem(id: string): PedidoItemForm {
 }
 
 /**
- * Genera ids temporales para los items en frontend.
- * No se guardan en base de datos; solo sirven para renderizar la lista.
+ * Genera ids temporales solo para renderizar items en el frontend.
  */
 function createItemId() {
   return `item-${crypto.randomUUID()}`;
 }
 
 /**
- * Convierte el texto del input a número.
- * Si el valor no es válido, lo tratamos como 0 para calcular sin romper la UI.
+ * Convierte valores de input a número sin romper la UI si el campo está vacío.
  */
 function toNumber(value: string): number {
   const parsed = Number(value);
@@ -82,15 +100,14 @@ function toNumber(value: string): number {
 }
 
 /**
- * Redondea montos a 2 decimales.
- * Evita resultados raros por operaciones con decimales en JavaScript.
+ * Redondea dinero a 2 decimales para subtotal y total mostrados en pantalla.
  */
 function roundMoney(value: number): number {
   return Math.round(value * 100) / 100;
 }
 
 /**
- * Muestra montos en formato moneda MXN.
+ * Muestra importes como moneda mexicana.
  */
 function formatMoney(value: number): string {
   return value.toLocaleString("es-MX", {
@@ -99,26 +116,61 @@ function formatMoney(value: number): string {
   });
 }
 
-export function NuevoPedidoForm({ clientes }: NuevoPedidoFormProps) {
-  const [clienteId, setClienteId] = useState("");
+/**
+ * Convierte los items existentes del pedido al formato editable del formulario.
+ */
+function mapInitialItems(initialData?: PedidoFormInitialData): PedidoItemForm[] {
+  if (!initialData?.items.length) {
+    return [createEmptyItem("item-1")];
+  }
+
+  return initialData.items.map((item, index) => ({
+    id: `item-${index + 1}`,
+    nombre_snapshot: item.nombre_snapshot,
+    descripcion: item.descripcion ?? "",
+    cantidad: String(item.cantidad),
+    precio_unitario: String(item.precio_unitario),
+  }));
+}
+
+export function NuevoPedidoForm({
+  mode = "create",
+  clientes = [],
+  pedidoId,
+  initialData,
+}: NuevoPedidoFormProps) {
+  const router = useRouter();
+  const isEditMode = mode === "edit";
+
+  const [clienteId, setClienteId] = useState(initialData?.cliente.id ?? "");
   const [clienteSearch, setClienteSearch] = useState("");
-  const [fechaEntrega, setFechaEntrega] = useState("");
-  const [horaEntrega, setHoraEntrega] = useState("");
-  const [tipoEntrega, setTipoEntrega] = useState<TipoEntrega>("recoleccion");
-  const [direccionEntrega, setDireccionEntrega] = useState("");
-  const [notasInternas, setNotasInternas] = useState("");
+  const [fechaEntrega, setFechaEntrega] = useState(
+    initialData?.fecha_entrega ?? "",
+  );
+  const [horaEntrega, setHoraEntrega] = useState(
+    initialData?.hora_entrega ?? "",
+  );
+  const [tipoEntrega, setTipoEntrega] = useState<TipoEntrega>(
+    initialData?.tipo_entrega ?? "recoleccion",
+  );
+  const [direccionEntrega, setDireccionEntrega] = useState(
+    initialData?.direccion_entrega ?? "",
+  );
+  const [notasInternas, setNotasInternas] = useState(
+    initialData?.notas_internas ?? "",
+  );
 
   /**
-   * Items dinámicos del pedido.
-   * Esta parte corresponde a S2-006.
+   * Items dinámicos.
+   * En modo edición se inicializan con los items existentes del pedido.
    */
-  const [items, setItems] = useState<PedidoItemForm[]>([
-    createEmptyItem("item-1"),
-  ]);
+  const [items, setItems] = useState<PedidoItemForm[]>(
+    mapInitialItems(initialData),
+  );
 
   /**
    * Error de servidor.
-   * Se usa solo cuando el backend rechaza el guardado.
+   * Se usa cuando el backend rechaza guardar o actualizar.
    */
   const [error, setError] = useState<string | null>(null);
 
@@ -132,8 +184,8 @@ export function NuevoPedidoForm({ clientes }: NuevoPedidoFormProps) {
   const [isSaving, setIsSaving] = useState(false);
 
   /**
-   * Buscador simple de clientes activos.
-   * Filtra por nombre, teléfono o WhatsApp.
+   * Buscador simple de clientes activos para modo creación.
+   * En edición no se cambia el cliente porque no está en el alcance.
    */
   const clientesFiltrados = useMemo(() => {
     const query = clienteSearch.trim().toLowerCase();
@@ -173,7 +225,7 @@ export function NuevoPedidoForm({ clientes }: NuevoPedidoFormProps) {
   }, [items]);
 
   /**
-   * Calcula el total del pedido como suma de subtotales.
+   * Calcula el total como suma de subtotales.
    */
   const total = useMemo(() => {
     return roundMoney(
@@ -181,9 +233,8 @@ export function NuevoPedidoForm({ clientes }: NuevoPedidoFormProps) {
     );
   }, [itemsCalculados]);
 
-  /**
-   * Limpia el error de un campo general cuando el usuario lo corrige.
-   */
+  const cancelHref = isEditMode && pedidoId ? `/pedidos/${pedidoId}` : "/pedidos";
+
   function clearFieldError(
     field: "clienteId" | "fechaEntrega" | "horaEntrega",
   ) {
@@ -193,9 +244,6 @@ export function NuevoPedidoForm({ clientes }: NuevoPedidoFormProps) {
     }));
   }
 
-  /**
-   * Limpia el error de un campo específico de un item.
-   */
   function clearItemFieldError(itemId: string, field: keyof ItemFieldErrors) {
     setFieldErrors((currentErrors) => {
       const itemErrors = currentErrors.itemErrors?.[itemId];
@@ -226,8 +274,7 @@ export function NuevoPedidoForm({ clientes }: NuevoPedidoFormProps) {
   }
 
   /**
-   * Actualiza un campo de un item.
-   * Si ese campo tenía error, se limpia al editarlo.
+   * Actualiza un campo de item y limpia su error si el usuario corrige.
    */
   function updateItem(
     itemId: string,
@@ -249,9 +296,6 @@ export function NuevoPedidoForm({ clientes }: NuevoPedidoFormProps) {
     }
   }
 
-  /**
-   * Agrega un nuevo item al pedido antes de guardar.
-   */
   function addItem() {
     setItems((currentItems) => [
       ...currentItems,
@@ -264,9 +308,6 @@ export function NuevoPedidoForm({ clientes }: NuevoPedidoFormProps) {
     }));
   }
 
-  /**
-   * Quita un item del pedido antes de guardar.
-   */
   function removeItem(itemId: string) {
     setItems((currentItems) =>
       currentItems.filter((item) => item.id !== itemId),
@@ -284,9 +325,8 @@ export function NuevoPedidoForm({ clientes }: NuevoPedidoFormProps) {
   }
 
   /**
-   * Valida el formulario completo.
-   * Si hay errores, los muestra debajo de cada campo y no guarda nada.
-   * Si todo está correcto, llama al backend para crear el pedido.
+   * Valida campos obligatorios antes de llamar al backend.
+   * En modo edición reutiliza la misma validación de items y total.
    */
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -298,7 +338,7 @@ export function NuevoPedidoForm({ clientes }: NuevoPedidoFormProps) {
     const nextFieldErrors: FieldErrors = {};
     const nextItemErrors: Record<string, ItemFieldErrors> = {};
 
-    if (!clienteId) {
+    if (!isEditMode && !clienteId) {
       nextFieldErrors.clienteId = "Selecciona un cliente activo.";
     }
 
@@ -330,7 +370,8 @@ export function NuevoPedidoForm({ clientes }: NuevoPedidoFormProps) {
       if (!item.precio_unitario) {
         errorsForItem.precio_unitario = "El precio unitario es obligatorio.";
       } else if (item.precioUnitarioNumber < 0) {
-        errorsForItem.precio_unitario = "El precio unitario no puede ser negativo.";
+        errorsForItem.precio_unitario =
+          "El precio unitario no puede ser negativo.";
       }
 
       if (Object.keys(errorsForItem).length > 0) {
@@ -354,10 +395,7 @@ export function NuevoPedidoForm({ clientes }: NuevoPedidoFormProps) {
       return;
     }
 
-    setIsSaving(true);
-
-    const result = await createPedidoAction({
-      cliente_id: clienteId,
+    const payload = {
       fecha_entrega: fechaEntrega,
       hora_entrega: horaEntrega,
       tipo_entrega: tipoEntrega,
@@ -373,7 +411,17 @@ export function NuevoPedidoForm({ clientes }: NuevoPedidoFormProps) {
         precio_unitario: item.precioUnitarioNumber,
         subtotal: item.subtotal,
       })),
-    });
+    };
+
+    setIsSaving(true);
+
+    const result =
+      isEditMode && pedidoId
+        ? await updatePedidoAction(pedidoId, payload)
+        : await createPedidoAction({
+            cliente_id: clienteId,
+            ...payload,
+          });
 
     setIsSaving(false);
 
@@ -382,7 +430,14 @@ export function NuevoPedidoForm({ clientes }: NuevoPedidoFormProps) {
       return;
     }
 
-    setSuccessMessage("Pedido guardado correctamente.");
+    setSuccessMessage(
+      isEditMode
+        ? "Pedido actualizado correctamente."
+        : "Pedido guardado correctamente.",
+    );
+
+    router.push(`/pedidos/${result.data.id}`);
+    router.refresh();
   }
 
   return (
@@ -391,9 +446,13 @@ export function NuevoPedidoForm({ clientes }: NuevoPedidoFormProps) {
       className="space-y-6 rounded-lg border bg-background p-6 shadow-sm"
     >
       <div className="space-y-1">
-        <h3 className="font-medium">Datos base del pedido</h3>
+        <h3 className="font-medium">
+          {isEditMode ? "Editar pedido" : "Datos base del pedido"}
+        </h3>
         <p className="text-sm text-muted-foreground">
-          Captura cliente, entrega e items del pedido personalizado.
+          {isEditMode
+            ? "Actualiza datos básicos e items del pedido."
+            : "Captura cliente, entrega e items del pedido personalizado."}
         </p>
       </div>
 
@@ -409,69 +468,88 @@ export function NuevoPedidoForm({ clientes }: NuevoPedidoFormProps) {
         </div>
       ) : null}
 
-      <div className="space-y-4">
-        <div className="space-y-2">
-          <label htmlFor="clienteSearch" className="text-sm font-medium">
-            Buscar cliente activo
-          </label>
-          <input
-            id="clienteSearch"
-            type="search"
-            value={clienteSearch}
-            onChange={(event) => setClienteSearch(event.target.value)}
-            placeholder="Buscar por nombre, teléfono o WhatsApp"
-            className="h-9 w-full rounded-lg border border-input bg-background px-3 text-sm outline-none transition-colors placeholder:text-muted-foreground focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50"
-          />
+      {!isEditMode ? (
+        <div className="space-y-4">
+          <div className="space-y-2">
+            <label htmlFor="clienteSearch" className="text-sm font-medium">
+              Buscar cliente activo
+            </label>
+            <input
+              id="clienteSearch"
+              type="search"
+              value={clienteSearch}
+              onChange={(event) => setClienteSearch(event.target.value)}
+              placeholder="Buscar por nombre, teléfono o WhatsApp"
+              className="h-9 w-full rounded-lg border border-input bg-background px-3 text-sm outline-none transition-colors placeholder:text-muted-foreground focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50"
+            />
+          </div>
+
+          <div className="space-y-2">
+            <label htmlFor="clienteId" className="text-sm font-medium">
+              Cliente <span className="text-destructive">*</span>
+            </label>
+
+            <select
+              id="clienteId"
+              value={clienteId}
+              onChange={(event) => {
+                setClienteId(event.target.value);
+                clearFieldError("clienteId");
+              }}
+              className="h-9 w-full rounded-lg border border-input bg-background px-3 text-sm outline-none transition-colors focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50"
+            >
+              <option value="">Selecciona un cliente</option>
+              {clientesFiltrados.map((cliente) => (
+                <option key={cliente.id} value={cliente.id}>
+                  {cliente.nombre}
+                  {cliente.telefono ? ` — ${cliente.telefono}` : ""}
+                </option>
+              ))}
+            </select>
+
+            {fieldErrors.clienteId ? (
+              <p className="text-sm text-destructive">
+                {fieldErrors.clienteId}
+              </p>
+            ) : null}
+
+            {clientes.length === 0 ? (
+              <p className="text-sm text-muted-foreground">
+                No hay clientes activos disponibles.{" "}
+                <Link href="/clientes/nuevo" className="font-medium underline">
+                  Crear cliente
+                </Link>
+              </p>
+            ) : null}
+
+            {clientes.length > 0 && clientesFiltrados.length === 0 ? (
+              <p className="text-sm text-muted-foreground">
+                No se encontró un cliente con esa búsqueda.{" "}
+                <Link href="/clientes/nuevo" className="font-medium underline">
+                  Crear cliente
+                </Link>
+              </p>
+            ) : null}
+          </div>
         </div>
+      ) : (
+        <div className="rounded-lg border bg-muted/30 p-4">
+          <p className="text-sm font-medium">Cliente asociado</p>
+          <p className="mt-1 text-sm text-muted-foreground">
+            {initialData?.cliente.nombre ?? "Cliente no disponible"}
+          </p>
 
-        <div className="space-y-2">
-          <label htmlFor="clienteId" className="text-sm font-medium">
-            Cliente <span className="text-destructive">*</span>
-          </label>
-
-          <select
-            id="clienteId"
-            value={clienteId}
-            onChange={(event) => {
-              setClienteId(event.target.value);
-              clearFieldError("clienteId");
-            }}
-            className="h-9 w-full rounded-lg border border-input bg-background px-3 text-sm outline-none transition-colors focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50"
-          >
-            <option value="">Selecciona un cliente</option>
-            {clientesFiltrados.map((cliente) => (
-              <option key={cliente.id} value={cliente.id}>
-                {cliente.nombre}
-                {cliente.telefono ? ` — ${cliente.telefono}` : ""}
-              </option>
-            ))}
-          </select>
-
-          {fieldErrors.clienteId ? (
-            <p className="text-sm text-destructive">
-              {fieldErrors.clienteId}
-            </p>
-          ) : null}
-
-          {clientes.length === 0 ? (
-            <p className="text-sm text-muted-foreground">
-              No hay clientes activos disponibles.{" "}
-              <Link href="/clientes/nuevo" className="font-medium underline">
-                Crear cliente
-              </Link>
-            </p>
-          ) : null}
-
-          {clientes.length > 0 && clientesFiltrados.length === 0 ? (
-            <p className="text-sm text-muted-foreground">
-              No se encontró un cliente con esa búsqueda.{" "}
-              <Link href="/clientes/nuevo" className="font-medium underline">
-                Crear cliente
-              </Link>
-            </p>
+          {initialData?.cliente.id ? (
+            <div className="mt-3">
+              <Button asChild size="sm" variant="outline">
+                <Link href={`/clientes/${initialData.cliente.id}`}>
+                  Ver ficha de cliente
+                </Link>
+              </Button>
+            </div>
           ) : null}
         </div>
-      </div>
+      )}
 
       <div className="grid gap-4 md:grid-cols-2">
         <div className="space-y-2">
@@ -733,11 +811,17 @@ export function NuevoPedidoForm({ clientes }: NuevoPedidoFormProps) {
 
       <div className="flex flex-col-reverse gap-2 md:flex-row md:justify-end">
         <Button asChild type="button" variant="outline">
-          <Link href="/clientes">Cancelar</Link>
+          <Link href={cancelHref}>Cancelar</Link>
         </Button>
 
         <Button type="submit" disabled={isSaving}>
-          {isSaving ? "Guardando..." : "Guardar pedido"}
+          {isSaving
+            ? isEditMode
+              ? "Guardando cambios..."
+              : "Guardando..."
+            : isEditMode
+              ? "Guardar cambios"
+              : "Guardar pedido"}
         </Button>
       </div>
     </form>
