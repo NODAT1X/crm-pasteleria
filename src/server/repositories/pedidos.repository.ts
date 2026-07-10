@@ -178,8 +178,12 @@ export async function listPedidos(params: {
   return prisma.pedido.findMany({
     where,
     include: listInclude,
-    // Vista operativa: primero la entrega más próxima; desempate por creación.
-    orderBy: [{ fecha_entrega: "asc" }, { created_at: "desc" }],
+    // Vista operativa: primero la entrega más próxima; desempata por hora y creación.
+    orderBy: [
+      { fecha_entrega: "asc" },
+      { hora_entrega: "asc" },
+      { created_at: "desc" },
+    ],
     take: filters.take,
     skip: filters.skip,
   });
