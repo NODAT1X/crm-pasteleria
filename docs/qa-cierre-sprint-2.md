@@ -321,7 +321,7 @@ Texto vacío esperado para cliente sin pedidos:
 
 | ID | Descripción | Severidad | Bloqueante | Estado |
 |---|---|---|---|---|
-| BUG-01 | Durante la validación inicial apareció un problema relacionado con Prisma al intentar acceder al módulo de pedidos. El bug fue corregido y posteriormente el flujo pudo validarse correctamente. | Alta | No actualmente | Resuelto |
+| BUG-01 | Durante QA se presentó un problema inicial relacionado con Prisma al acceder al módulo de pedidos. El bug fue corregido y posteriormente el flujo pudo validarse correctamente. | Alta | No actualmente | Resuelto |
 
 ---
 
@@ -329,9 +329,9 @@ Texto vacío esperado para cliente sin pedidos:
 
 | ID | Pendiente | Prioridad | Comentario |
 |---|---|---|---|
-| PEND-01 | Cambiar el texto “Items del pedido” por un texto más claro para el dueño de la pastelería. | Baja | Se recomienda usar “Productos del pedido” o “Conceptos del pedido”, porque “Datos del pedido” puede confundirse con fecha, hora, cliente y notas. |
-| PEND-02 | Mejorar el buscador de cliente activo en el formulario de nuevo pedido. | Media | Actualmente el cliente puede seleccionarse desde el desplegable, pero el buscador no funciona como motor de búsqueda independiente ni tiene botón de búsqueda. Conforme aumenten los clientes, esto puede afectar la operación. |
-| PEND-03 | Revisar tiempo de creación de pedido. | Baja / Media | El pedido se crea correctamente, pero el guardado tarda aproximadamente 10 segundos. No bloquea el flujo, pero conviene monitorearlo y optimizarlo si se mantiene. |
+| PEND-01 | Cambiar el texto “Items del pedido” por un texto más claro para usuario final. | Baja | Se recomienda “Productos del pedido” o “Conceptos del pedido”. |
+| PEND-02 | Mejorar buscador de cliente activo en nuevo pedido. | Media | Actualmente se puede seleccionar cliente, pero el buscador no funciona como búsqueda independiente. |
+| PEND-03 | Revisar tiempo de creación de pedido. | Baja / Media | El pedido se crea correctamente, pero tarda aproximadamente 10 segundos. |
 
 ---
 
@@ -351,11 +351,11 @@ Sprint 3 puede iniciar: Sí.
 
 ## Comentario
 
-Se validó correctamente el flujo funcional del Sprint 2 desde producto. El sistema permite crear pedidos personalizados asociados a clientes activos, capturar items, calcular total, validar campos obligatorios, listar pedidos, consultar detalle, editar pedidos, cambiar estados válidos, bloquear edición en estados finales y mostrar historial real en la ficha del cliente.
+Se validó correctamente el flujo funcional del Sprint 2. El sistema permite crear pedidos personalizados asociados a clientes activos, capturar items, calcular total, validar campos obligatorios, listar pedidos, consultar detalle, editar pedidos, cambiar estados válidos, bloquear edición en estados finales y mostrar historial real en la ficha del cliente.
 
 También se confirmó que pagos, calendario visual y WhatsApp no están activos, respetando el alcance definido para Sprint 2.
 
-Durante QA se detectó un bug inicial relacionado con Prisma, pero fue corregido y no quedó como bloqueo activo. Los pendientes encontrados son de experiencia de usuario, búsqueda y rendimiento, por lo que no impiden iniciar el siguiente sprint.
+---
 
 # 8. Criterios para GO
 
