@@ -254,8 +254,8 @@ export const pedidoItemSchema = z
 
 /**
  * Schema para CREAR un pedido. El estado inicial (`cotizacion`) lo fija el
- * backend/Prisma, por eso NO se acepta aquí. `total` es opcional (lo calcula el
- * backend en S2-004); si no viene se asume 0, y siempre se valida >= 0.
+ * backend/Prisma, por eso NO se acepta aquí. `total` tampoco se acepta desde la
+ * UI: el backend lo calcula siempre desde los items.
  */
 export const createPedidoSchema = z.object({
   cliente_id: clienteIdRequerido,
@@ -270,15 +270,6 @@ export const createPedidoSchema = z.object({
         `La dirección de entrega debe tener como máximo ${MAX_DIRECCION} caracteres.`,
       )
       .nullable(),
-  ),
-  total: z.preprocess(
-    (value) =>
-      value === undefined ||
-      value === null ||
-      (typeof value === "string" && value.trim() === "")
-        ? 0
-        : value,
-    moneyNumber("El total"),
   ),
   notas_internas: optionalText(
     z
@@ -300,8 +291,9 @@ export const createPedidoSchema = z.object({
 /**
  * Schema para ACTUALIZAR un pedido. Edición parcial: todos los campos son
  * opcionales y debe enviarse al menos uno. NO maneja cambio de estado (eso va
- * por `changeEstadoPedidoSchema`). Si se envían `items`, deben ser >= 1 y
- * coherentes en subtotal. Los textos opcionales vacíos se normalizan a `null`.
+ * por `changeEstadoPedidoSchema`). Tampoco acepta `total`: si se envían
+ * `items`, el backend recalcula el total desde esos renglones. Los textos
+ * opcionales vacíos se normalizan a `null`.
  */
 export const updatePedidoSchema = z
   .object({
@@ -318,7 +310,6 @@ export const updatePedidoSchema = z
         )
         .nullable(),
     ),
-    total: z.preprocess(toNumberOrKeep, moneyNumber("El total")).optional(),
     notas_internas: patchText(
       z
         .string()

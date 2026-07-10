@@ -2,7 +2,6 @@ import Link from "next/link";
 
 import { Button } from "@/components/ui/button";
 import { listPedidosAction } from "@/modules/pedidos/actions";
-import type { PedidoListItemDTO } from "@/modules/pedidos/types";
 
 export const dynamic = "force-dynamic";
 
@@ -41,20 +40,6 @@ function formatMoney(value: number) {
   });
 }
 
-/**
- * Orden operativo del listado.
- * Primero por fecha_entrega y después por hora_entrega.
- */
-function sortPedidosByDelivery(a: PedidoListItemDTO, b: PedidoListItemDTO) {
-  const dateDiff = a.fecha_entrega.getTime() - b.fecha_entrega.getTime();
-
-  if (dateDiff !== 0) {
-    return dateDiff;
-  }
-
-  return a.hora_entrega.localeCompare(b.hora_entrega);
-}
-
 export default async function PedidosPage() {
   /**
    * Carga pedidos del tenant actual.
@@ -65,7 +50,7 @@ export default async function PedidosPage() {
     skip: 0,
   });
 
-  const pedidos = result.ok ? [...result.data].sort(sortPedidosByDelivery) : [];
+  const pedidos = result.ok ? result.data : [];
 
   return (
     <section className="space-y-6">

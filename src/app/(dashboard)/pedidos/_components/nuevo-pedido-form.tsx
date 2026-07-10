@@ -402,7 +402,6 @@ export function NuevoPedidoForm({
       direccion_entrega:
         tipoEntrega === "domicilio" ? direccionEntrega : null,
       notas_internas: notasInternas,
-      total,
       items: itemsCalculados.map((item) => ({
         producto_id: null,
         nombre_snapshot: item.nombre_snapshot,

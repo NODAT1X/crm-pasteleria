@@ -221,7 +221,7 @@ export async function createPedidoService(
   // Regla: el cliente debe existir, ser del tenant y estar activo.
   await assertClienteAsignable(pasteleriaId, parsed.data.cliente_id);
 
-  // El backend calcula subtotales y total (ignora cualquier total del input).
+  // El backend calcula subtotales y total; el schema no acepta total del input.
   const { items, total } = calcularItemsYTotal(parsed.data.items);
 
   const pedido = await createPedidoWithItems({
