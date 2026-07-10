@@ -1,11 +1,11 @@
-# Entorno local
+AUTH_SECRET# Entorno local
 
 Este documento describe los pasos básicos para configurar el entorno local del proyecto CRM Pastelería.
 
 El objetivo es que cualquier integrante del equipo pueda clonar, instalar y levantar el proyecto sin depender de instrucciones sueltas por chat.
 
 > Este documento no incluye secretos reales, URLs productivas ni resolución de errores particulares de cada computadora.
-
+---
 ## Requisitos previos
 
 Antes de iniciar, asegúrate de tener instalado:
@@ -67,15 +67,25 @@ En Windows PowerShell:
 Copy-Item .env.example .env
 ```
 
-## Variables requeridas
+## Agregar script seguro para Prisma generate
 
-El archivo `.env.example` incluye las siguientes variables base:
+Abre:
+
+```powershell
+code package.json
+
+```
+
+## Variables de entorno necesarias
+
+Crear archivo `.env` con base en `.env.example`.
+
+Variables principales:
 
 ```env
-DATABASE_URL="postgresql://USER:PASSWORD@HOST:PORT/DATABASE?schema=public"
-AUTH_SECRET="replace-with-secure-random-secret"
-NODE_ENV="development"
-```
+DATABASE_URL="..."
+BETTER_AUTH_SECRET="..."
+BETTER_AUTH_URL="http://localhost:3000"
 
 ### Importante
 
