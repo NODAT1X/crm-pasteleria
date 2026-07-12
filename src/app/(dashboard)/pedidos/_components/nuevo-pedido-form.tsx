@@ -436,7 +436,6 @@ export function NuevoPedidoForm({
     );
 
     router.push(`/pedidos/${result.data.id}`);
-    router.refresh();
   }
 
   return (
