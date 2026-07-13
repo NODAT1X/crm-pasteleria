@@ -1,3 +1,5 @@
+import { TIPO_ENTREGA_OPTIONS } from "@/modules/pedidos/labels";
+
 import type { TipoEntrega } from "./nuevo-pedido-form";
 
 type EntregaFieldsProps = {
@@ -81,8 +83,11 @@ export function EntregaFields({
           }
           className="h-9 w-full rounded-lg border border-input bg-background px-3 text-sm outline-none transition-colors focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50"
         >
-          <option value="recoleccion">Recolección</option>
-          <option value="domicilio">Domicilio</option>
+          {TIPO_ENTREGA_OPTIONS.map((option) => (
+            <option key={option.value} value={option.value}>
+              {option.label}
+            </option>
+          ))}
         </select>
       </div>
 

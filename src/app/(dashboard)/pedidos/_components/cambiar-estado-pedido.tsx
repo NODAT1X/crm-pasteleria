@@ -6,25 +6,12 @@ import { useRouter } from "next/navigation";
 import { Button } from "@/components/ui/button";
 import type { EstadoPedido } from "@/generated/prisma/enums";
 import { changeEstadoPedidoAction } from "@/modules/pedidos/actions";
+import { getAccionCambioEstadoPedidoLabel } from "@/modules/pedidos/labels";
 import { getNextEstadosPedido } from "@/validation/pedidos";
 
 type CambiarEstadoPedidoProps = {
   pedidoId: string;
   estadoActual: EstadoPedido;
-};
-
-/**
- * Texto orientado a la acción para cada estado destino (distinto del label del
- * estado, que describe el estado en sí). `Record<EstadoPedido, string>` obliga a
- * contemplar todos los estados: si se agrega uno al enum, deja de compilar.
- */
-const ACCION_LABEL: Record<EstadoPedido, string> = {
-  cotizacion: "Cotización",
-  confirmado: "Confirmar pedido",
-  en_preparacion: "Pasar a preparación",
-  listo_para_entregar: "Marcar listo para entregar",
-  entregado: "Marcar como entregado",
-  cancelado: "Cancelar pedido",
 };
 
 /**
@@ -106,7 +93,9 @@ export function CambiarEstadoPedido({
               disabled={isPending}
               onClick={() => handleChange(destino)}
             >
-              {enProceso ? "Procesando..." : ACCION_LABEL[destino]}
+              {enProceso
+                ? "Procesando..."
+                : getAccionCambioEstadoPedidoLabel(destino)}
             </Button>
           );
         })}
