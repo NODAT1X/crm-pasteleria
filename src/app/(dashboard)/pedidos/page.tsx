@@ -2,21 +2,10 @@ import Link from "next/link";
 
 import { Button } from "@/components/ui/button";
 import { listPedidosAction } from "@/modules/pedidos/actions";
+import { formatHoraEntrega } from "@/modules/pedidos/formatters";
+import { getEstadoPedidoLabel } from "@/modules/pedidos/labels";
 
 export const dynamic = "force-dynamic";
-
-/**
- * Etiquetas visibles para el dueño.
- * Evita mostrar valores técnicos como "en_preparacion" directamente en UI.
- */
-const ESTADO_PEDIDO_LABEL: Record<string, string> = {
-  cotizacion: "Cotización",
-  confirmado: "Confirmado",
-  en_preparacion: "En preparación",
-  listo_para_entregar: "Listo para entregar",
-  entregado: "Entregado",
-  cancelado: "Cancelado",
-};
 
 /**
  * Formatea la fecha de entrega en formato mexicano.
@@ -127,11 +116,12 @@ export default async function PedidosPage() {
                       {formatDate(pedido.fecha_entrega)}
                     </td>
 
-                    <td className="px-4 py-3">{pedido.hora_entrega}</td>
+                    <td className="px-4 py-3">
+                      {formatHoraEntrega(pedido.hora_entrega)}
+                    </td>
 
                     <td className="px-4 py-3">
-                      {ESTADO_PEDIDO_LABEL[pedido.estado_pedido] ??
-                        pedido.estado_pedido}
+                      {getEstadoPedidoLabel(pedido.estado_pedido)}
                     </td>
 
                     <td className="px-4 py-3 text-right">

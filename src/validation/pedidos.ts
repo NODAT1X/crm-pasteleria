@@ -1,6 +1,7 @@
 import { z } from "zod";
 
 import { EstadoPedido, TipoEntrega } from "@/generated/prisma/enums";
+import { ESTADO_PEDIDO_LABEL } from "@/modules/pedidos/labels";
 
 /**
  * Validaciones de backend para el módulo de pedidos (Sprint 2).
@@ -33,15 +34,8 @@ const TIPO_ENTREGA_VALUES = [
 
 export { ESTADO_PEDIDO_VALUES, TIPO_ENTREGA_VALUES };
 
-// Etiquetas legibles en español para mensajes de error de transición.
-export const ESTADO_PEDIDO_LABEL: Record<EstadoPedido, string> = {
-  cotizacion: "Cotización",
-  confirmado: "Confirmado",
-  en_preparacion: "En preparación",
-  listo_para_entregar: "Listo para entregar",
-  entregado: "Entregado",
-  cancelado: "Cancelado",
-};
+// Las etiquetas legibles usadas en los mensajes de error de transición viven en
+// `@/modules/pedidos/labels` (única fuente de verdad del texto visible, S3-006).
 
 // Longitudes máximas razonables por campo (sin sobre-validar en Sprint 2).
 const MAX_ID = 60;
