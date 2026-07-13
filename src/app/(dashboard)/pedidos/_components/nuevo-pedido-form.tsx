@@ -146,8 +146,17 @@ export function NuevoPedidoForm({
   const router = useRouter();
   const isEditMode = mode === "edit";
 
-  const [clienteId, setClienteId] = useState(initialData?.cliente.id ?? "");
-  const [clienteSearch, setClienteSearch] = useState("");
+  /**
+   * Cliente seleccionado (fuente de verdad del cliente del pedido). El
+   * `cliente_id` que se envía al backend se deriva de aquí. En edición el
+   * cliente no se cambia, pero se conserva para mostrarlo.
+   */
+  const [selectedCliente, setSelectedCliente] = useState<ClienteOption | null>(
+    initialData?.cliente ?? null,
+  );
+
+  const clienteId = selectedCliente?.id ?? "";
+
   const [fechaEntrega, setFechaEntrega] = useState(
     initialData?.fecha_entrega ?? "",
   );
@@ -186,28 +195,6 @@ export function NuevoPedidoForm({
 
   const [successMessage, setSuccessMessage] = useState<string | null>(null);
   const [isSaving, setIsSaving] = useState(false);
-
-  /**
-   * Buscador simple de clientes activos para modo creación.
-   * En edición no se cambia el cliente porque no está en el alcance.
-   */
-  const clientesFiltrados = useMemo(() => {
-    const query = clienteSearch.trim().toLowerCase();
-
-    if (!query) return clientes;
-
-    return clientes.filter((cliente) => {
-      const nombre = cliente.nombre.toLowerCase();
-      const telefono = cliente.telefono ?? "";
-      const whatsapp = cliente.whatsapp ?? "";
-
-      return (
-        nombre.includes(query) ||
-        telefono.includes(query) ||
-        whatsapp.includes(query)
-      );
-    });
-  }, [clienteSearch, clientes]);
 
   /**
    * Calcula subtotal por item.
@@ -474,13 +461,12 @@ export function NuevoPedidoForm({
       {!isEditMode ? (
         <ClienteSelectorField
           clientes={clientes}
-          clientesFiltrados={clientesFiltrados}
-          clienteSearch={clienteSearch}
-          onClienteSearchChange={setClienteSearch}
-          clienteId={clienteId}
-          onClienteIdChange={(value) => {
-            setClienteId(value);
-            clearFieldError("clienteId");
+          value={selectedCliente}
+          onChange={(cliente) => {
+            setSelectedCliente(cliente);
+            if (cliente) {
+              clearFieldError("clienteId");
+            }
           }}
           error={fieldErrors.clienteId}
         />
