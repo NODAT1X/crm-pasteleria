@@ -188,9 +188,9 @@ export default async function PedidoDetallePage({
 
       <div className="overflow-hidden rounded-lg border bg-background shadow-sm">
         <div className="border-b p-4">
-          <h3 className="font-medium">Artículos del pedido</h3>
+          <h3 className="font-medium">Productos del pedido</h3>
           <p className="mt-1 text-sm text-muted-foreground">
-            Snapshot de conceptos, cantidades, precios y subtotales guardados en
+            Conceptos, cantidades, precios y subtotales guardados en
             el pedido.
           </p>
         </div>
@@ -198,10 +198,10 @@ export default async function PedidoDetallePage({
         {pedido.items.length === 0 ? (
           <div className="p-6 text-center">
             <h4 className="text-sm font-medium">
-              Este pedido no tiene artículos registrados.
+              Este pedido no tiene productos registrados.
             </h4>
             <p className="mt-2 text-sm text-muted-foreground">
-              No se encontraron items asociados al pedido.
+              No se encontraron productos asociados al pedido.
             </p>
           </div>
         ) : (

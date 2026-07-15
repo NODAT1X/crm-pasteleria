@@ -35,7 +35,7 @@ export function PedidoItemsSection({
     <div className="space-y-4 rounded-lg border p-4">
       <div className="flex flex-col gap-2 md:flex-row md:items-center md:justify-between">
         <div>
-          <h3 className="font-medium">Items del pedido</h3>
+          <h3 className="font-medium">Productos del pedido</h3>
           <p className="text-sm text-muted-foreground">
             Agrega uno o más conceptos. El total se calcula desde los
             subtotales.
@@ -43,13 +43,13 @@ export function PedidoItemsSection({
         </div>
 
         <Button type="button" variant="outline" onClick={onAddItem}>
-          Agregar item
+          Agregar producto
         </Button>
       </div>
 
       {items.length === 0 ? (
         <div className="rounded-lg border bg-muted/30 p-4 text-sm text-muted-foreground">
-          Agrega al menos un item para poder guardar el pedido.
+          Agrega al menos un producto para poder guardar el pedido.
         </div>
       ) : null}
 

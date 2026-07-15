@@ -28,7 +28,7 @@ export function PedidoItemRow({
   return (
     <div className="rounded-lg border p-4">
       <div className="mb-4 flex items-center justify-between gap-2">
-        <h4 className="text-sm font-medium">Item {index + 1}</h4>
+        <h4 className="text-sm font-medium">Producto {index + 1}</h4>
 
         <Button type="button" variant="outline" onClick={onRemove}>
           Quitar
@@ -74,7 +74,7 @@ export function PedidoItemRow({
             onChange={(event) =>
               onFieldChange("descripcion", event.target.value)
             }
-            placeholder="Detalle opcional del item"
+            placeholder="Detalle opcional del producto"
             rows={2}
             className="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm outline-none transition-colors placeholder:text-muted-foreground focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50"
           />

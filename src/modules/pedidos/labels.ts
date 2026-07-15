@@ -29,8 +29,8 @@ export const ESTADO_PEDIDO_LABEL: Record<EstadoPedido, string> = {
 
 // Nombre del tipo de entrega (detalle y selector del formulario).
 export const TIPO_ENTREGA_LABEL: Record<TipoEntrega, string> = {
-  recoleccion: "Recolección",
-  domicilio: "Domicilio",
+  recoleccion: "En sucursal",
+  domicilio: "A domicilio",
 };
 
 /**
