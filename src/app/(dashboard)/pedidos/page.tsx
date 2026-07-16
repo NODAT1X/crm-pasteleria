@@ -1,6 +1,10 @@
 import Link from "next/link";
 
 import { Button } from "@/components/ui/button";
+import {
+  getEstadoPagoBadgeClass,
+  getEstadoPagoLabel,
+} from "@/modules/pagos/labels";
 import { listPedidosAction } from "@/modules/pedidos/actions";
 import { formatHoraEntrega } from "@/modules/pedidos/formatters";
 import { getEstadoPedidoLabel } from "@/modules/pedidos/labels";
@@ -117,7 +121,7 @@ export default async function PedidosPage({ searchParams }: PedidosPageProps) {
           <p className="mt-2 text-sm text-muted-foreground">
             {hayFiltrosActivos
               ? "Ajusta o limpia los filtros para ver más resultados."
-              : "Cuando se creen pedidos, aparecerán en este listado con cliente, fecha, hora, estado y total."}
+              : "Cuando se creen pedidos, aparecerán en este listado con cliente, fecha, hora, estado, estado de pago y total."}
           </p>
 
           <div className="mt-4">
@@ -151,6 +155,7 @@ export default async function PedidosPage({ searchParams }: PedidosPageProps) {
                   <th className="px-4 py-3 font-medium">Fecha</th>
                   <th className="px-4 py-3 font-medium">Hora</th>
                   <th className="px-4 py-3 font-medium">Estado</th>
+                  <th className="px-4 py-3 font-medium">Estado de pago</th>
                   <th className="px-4 py-3 text-right font-medium">Total</th>
                   <th className="px-4 py-3 text-right font-medium">Acción</th>
                 </tr>
@@ -178,6 +183,19 @@ export default async function PedidosPage({ searchParams }: PedidosPageProps) {
 
                     <td className="px-4 py-3">
                       {getEstadoPedidoLabel(pedido.estado_pedido)}
+                    </td>
+
+                    <td className="px-4 py-3">
+                      <span
+                        className={`inline-flex items-center rounded-full px-2.5 py-0.5 text-xs font-medium ${getEstadoPagoBadgeClass(pedido.estado_pago)}`}
+                      >
+                        {getEstadoPagoLabel(pedido.estado_pago)}
+                      </span>
+                      {pedido.saldo_pendiente > 0 ? (
+                        <div className="mt-1 text-xs text-muted-foreground">
+                          {formatMoney(pedido.saldo_pendiente)} pendiente
+                        </div>
+                      ) : null}
                     </td>
 
                     <td className="px-4 py-3 text-right">
