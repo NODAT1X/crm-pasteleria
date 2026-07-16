@@ -226,6 +226,17 @@ export const registrarRetencionSchema = strictObjectEs({
   notas: textoOpcional("Las notas", MAX_NOTAS),
 });
 
+// --- Consultas financieras por pedido ---------------------------------------------
+
+/**
+ * Schema para CONSULTAR información financiera de un pedido (listado de
+ * movimientos y resumen financiero). Solo acepta `pedido_id`; el tenant se
+ * deriva del contexto admin, nunca del input (S3-014).
+ */
+export const pedidoFinancieroQuerySchema = strictObjectEs({
+  pedido_id: pedidoIdSchema,
+});
+
 // --- Anular movimiento financiero ------------------------------------------------
 
 /**
@@ -256,4 +267,7 @@ export type RegistrarDevolucionInput = z.infer<typeof registrarDevolucionSchema>
 export type RegistrarRetencionInput = z.infer<typeof registrarRetencionSchema>;
 export type AnularMovimientoFinancieroInput = z.infer<
   typeof anularMovimientoFinancieroSchema
+>;
+export type PedidoFinancieroQueryInput = z.infer<
+  typeof pedidoFinancieroQuerySchema
 >;
