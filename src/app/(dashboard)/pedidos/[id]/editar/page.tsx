@@ -85,8 +85,8 @@ export default async function EditarPedidoPage({
             Pedido de {pedido.cliente.nombre}
           </h2>
           <p className="text-sm text-muted-foreground">
-            Edita datos básicos e items del pedido mientras no esté entregado ni
-            cancelado.
+            Edita los datos básicos y los productos del pedido mientras no esté
+            entregado ni cancelado.
           </p>
         </div>
 

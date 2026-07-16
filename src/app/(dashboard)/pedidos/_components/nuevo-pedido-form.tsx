@@ -342,14 +342,14 @@ export function NuevoPedidoForm({
     }
 
     if (items.length === 0) {
-      nextFieldErrors.itemsRequired = "Agrega al menos un item al pedido.";
+      nextFieldErrors.itemsRequired = "Agrega al menos un producto al pedido.";
     }
 
     itemsCalculados.forEach((item) => {
       const errorsForItem: ItemFieldErrors = {};
 
       if (!item.nombre_snapshot.trim()) {
-        errorsForItem.nombre_snapshot = "El nombre del item es obligatorio.";
+        errorsForItem.nombre_snapshot = "El nombre del producto es obligatorio.";
       }
 
       if (!item.cantidad || item.cantidadNumber <= 0) {
@@ -440,8 +440,8 @@ export function NuevoPedidoForm({
         </h3>
         <p className="text-sm text-muted-foreground">
           {isEditMode
-            ? "Actualiza datos básicos e items del pedido."
-            : "Captura cliente, entrega e items del pedido personalizado."}
+            ? "Actualiza los datos básicos y los productos del pedido."
+            : "Captura el cliente, la entrega y los productos del pedido personalizado."}
         </p>
       </div>
 
