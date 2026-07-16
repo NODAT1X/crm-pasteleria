@@ -35,6 +35,7 @@ model Pasteleria {
   // Back-reference requerido por la relación PedidoItem -> Pasteleria (Prisma
   // exige el lado opuesto). El filtrado por tenant se hace por `pasteleria_id`.
   pedido_items PedidoItem[]
+  movimientos_financieros MovimientoFinanciero[]
 
   @@map("pastelerias")
 }
@@ -186,9 +187,10 @@ model Pedido {
   created_at        DateTime     @default(now())
   updated_at        DateTime     @updatedAt
 
-  pasteleria Pasteleria   @relation(fields: [pasteleria_id], references: [id])
-  cliente    Cliente      @relation(fields: [cliente_id], references: [id])
-  items      PedidoItem[]
+  pasteleria              Pasteleria             @relation(fields: [pasteleria_id], references: [id])
+  cliente                 Cliente                @relation(fields: [cliente_id], references: [id])
+  items                   PedidoItem[]
+  movimientos_financieros MovimientoFinanciero[]
 
   @@index([pasteleria_id])
   @@index([pasteleria_id, cliente_id])
@@ -222,4 +224,79 @@ model PedidoItem {
   @@index([pasteleria_id, pedido_id])
   @@index([producto_id])
   @@map("pedido_items")
+}
+
+// --- Movimientos financieros (Sprint 3, S3-012) ---
+
+// Método por el que entra/sale el dinero. MVP: solo efectivo y transferencia.
+enum MetodoPago {
+  efectivo
+  transferencia
+
+  @@map("metodo_pago")
+}
+
+// Naturaleza del movimiento financiero asociado a un pedido.
+// Las anulaciones no son un tipo: se modelan como estado `anulado`.
+enum TipoMovimientoPago {
+  pago
+  devolucion
+  retencion
+
+  @@map("tipo_movimiento_pago")
+}
+
+// Clasificación del pago dentro del ciclo del pedido. Solo tiene sentido
+// cuando `tipo_movimiento = pago`; esa regla se validará en Zod/service.
+enum TipoPago {
+  anticipo
+  abono
+  liquidacion
+
+  @@map("tipo_pago")
+}
+
+// Estado del movimiento. Un movimiento capturado por error no se borra:
+// se marca como `anulado` para conservar el historial.
+enum EstadoMovimientoPago {
+  aplicado
+  anulado
+
+  @@map("estado_movimiento_pago")
+}
+
+// Movimiento financiero de un pedido (pago, devolución o retención).
+// Multi-tenant por `pasteleria_id`. El total pagado, el saldo pendiente y el
+// estado de pago se derivarán después a partir de los movimientos `aplicado`;
+// aquí solo se modela la estructura base (S3-012).
+model MovimientoFinanciero {
+  id              String               @id @default(cuid())
+  pasteleria_id   String
+  pedido_id       String
+  tipo_movimiento TipoMovimientoPago
+  // Opcionales a nivel BD: Zod/service exigirá `metodo_pago` y `tipo_pago`
+  // cuando `tipo_movimiento = pago` (issues posteriores del Sprint 3).
+  metodo_pago     MetodoPago?
+  tipo_pago       TipoPago?
+  // Dinero: Decimal (nunca Float). `monto > 0` se validará en Zod/service.
+  monto           Decimal              @db.Decimal(10, 2)
+  // Referencia externa opcional (p. ej. folio de transferencia).
+  referencia      String?
+  notas           String?
+  estado          EstadoMovimientoPago @default(aplicado)
+  // Fecha en que se recibió/realizó el movimiento (puede diferir de created_at).
+  fecha_recepcion DateTime             @default(now())
+  created_at      DateTime             @default(now())
+  updated_at      DateTime             @updatedAt
+
+  pasteleria Pasteleria @relation(fields: [pasteleria_id], references: [id])
+  pedido     Pedido     @relation(fields: [pedido_id], references: [id])
+
+  @@index([pasteleria_id])
+  @@index([pedido_id])
+  @@index([pasteleria_id, pedido_id])
+  @@index([pasteleria_id, estado])
+  @@index([pasteleria_id, tipo_movimiento])
+  @@index([pasteleria_id, fecha_recepcion])
+  @@map("movimientos_financieros")
 }
