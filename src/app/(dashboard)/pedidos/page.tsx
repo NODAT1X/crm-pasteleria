@@ -2,20 +2,22 @@ import Link from "next/link";
 
 import { Button } from "@/components/ui/button";
 import { listPedidosAction } from "@/modules/pedidos/actions";
+import { formatHoraEntrega } from "@/modules/pedidos/formatters";
+import { getEstadoPedidoLabel } from "@/modules/pedidos/labels";
+import { ESTADO_PEDIDO_VALUES } from "@/validation/pedidos";
+
+import { PedidosFiltros } from "./_components/pedidos-filtros";
 
 export const dynamic = "force-dynamic";
 
-/**
- * Etiquetas visibles para el dueño.
- * Evita mostrar valores técnicos como "en_preparacion" directamente en UI.
- */
-const ESTADO_PEDIDO_LABEL: Record<string, string> = {
-  cotizacion: "Cotización",
-  confirmado: "Confirmado",
-  en_preparacion: "En preparación",
-  listo_para_entregar: "Listo para entregar",
-  entregado: "Entregado",
-  cancelado: "Cancelado",
+// Formato que produce <input type="date"> ("yyyy-mm-dd").
+const FECHA_FILTRO_REGEX = /^\d{4}-\d{2}-\d{2}$/;
+
+type PedidosPageProps = {
+  searchParams?: Promise<{
+    estado?: string;
+    fecha?: string;
+  }>;
 };
 
 /**
@@ -40,12 +42,40 @@ function formatMoney(value: number) {
   });
 }
 
-export default async function PedidosPage() {
+// Devuelve el estado solo si es uno de los valores válidos; cualquier otro
+// valor ("" o algo manipulado en la URL) se ignora en vez de propagar un error.
+function sanitizeEstadoParam(value: string | undefined): string {
+  if (!value) return "";
+  return (ESTADO_PEDIDO_VALUES as readonly string[]).includes(value)
+    ? value
+    : "";
+}
+
+// Devuelve la fecha solo si respeta "yyyy-mm-dd"; cualquier otro formato se
+// ignora en vez de propagar un error.
+function sanitizeFechaParam(value: string | undefined): string {
+  return value && FECHA_FILTRO_REGEX.test(value) ? value : "";
+}
+
+export default async function PedidosPage({ searchParams }: PedidosPageProps) {
+  const params = await searchParams;
+
+  const estadoParam = sanitizeEstadoParam(params?.estado);
+  const fechaParam = sanitizeFechaParam(params?.fecha);
+  const hayFiltrosActivos = Boolean(estadoParam || fechaParam);
+
   /**
    * Carga pedidos del tenant actual.
    * El aislamiento por pastelería ya lo aplica el backend/action.
    */
   const result = await listPedidosAction({
+    estado_pedido: estadoParam || undefined,
+    fecha_entrega_desde: fechaParam
+      ? new Date(`${fechaParam}T00:00:00.000Z`)
+      : undefined,
+    fecha_entrega_hasta: fechaParam
+      ? new Date(`${fechaParam}T00:00:00.000Z`)
+      : undefined,
     take: 50,
     skip: 0,
   });
@@ -67,6 +97,10 @@ export default async function PedidosPage() {
         </Button>
       </div>
 
+      <div className="rounded-lg border bg-background p-6 shadow-sm">
+        <PedidosFiltros initialEstado={estadoParam} initialFecha={fechaParam} />
+      </div>
+
       {!result.ok ? (
         <div className="rounded-lg border border-destructive/30 bg-destructive/10 p-4 text-sm text-destructive">
           {result.error}
@@ -75,16 +109,27 @@ export default async function PedidosPage() {
 
       {result.ok && pedidos.length === 0 ? (
         <div className="rounded-lg border bg-background p-6 text-center shadow-sm">
-          <h3 className="font-medium">Aún no hay pedidos registrados.</h3>
+          <h3 className="font-medium">
+            {hayFiltrosActivos
+              ? "No se encontraron pedidos con estos filtros."
+              : "Aún no hay pedidos registrados."}
+          </h3>
           <p className="mt-2 text-sm text-muted-foreground">
-            Cuando se creen pedidos, aparecerán en este listado con cliente,
-            fecha, hora, estado y total.
+            {hayFiltrosActivos
+              ? "Ajusta o limpia los filtros para ver más resultados."
+              : "Cuando se creen pedidos, aparecerán en este listado con cliente, fecha, hora, estado y total."}
           </p>
 
           <div className="mt-4">
-            <Button asChild>
-              <Link href="/pedidos/nuevo">Crear nuevo pedido</Link>
-            </Button>
+            {hayFiltrosActivos ? (
+              <Button asChild variant="outline">
+                <Link href="/pedidos">Limpiar filtros</Link>
+              </Button>
+            ) : (
+              <Button asChild>
+                <Link href="/pedidos/nuevo">Crear nuevo pedido</Link>
+              </Button>
+            )}
           </div>
         </div>
       ) : null}
@@ -127,11 +172,12 @@ export default async function PedidosPage() {
                       {formatDate(pedido.fecha_entrega)}
                     </td>
 
-                    <td className="px-4 py-3">{pedido.hora_entrega}</td>
+                    <td className="px-4 py-3">
+                      {formatHoraEntrega(pedido.hora_entrega)}
+                    </td>
 
                     <td className="px-4 py-3">
-                      {ESTADO_PEDIDO_LABEL[pedido.estado_pedido] ??
-                        pedido.estado_pedido}
+                      {getEstadoPedidoLabel(pedido.estado_pedido)}
                     </td>
 
                     <td className="px-4 py-3 text-right">

@@ -35,7 +35,7 @@ export default async function DashboardLayout({
             <p className="text-sm text-muted-foreground">CRM Pastelería</p>
             <h1 className="text-xl font-semibold">Área interna</h1>
             <p className="text-sm text-muted-foreground">
-              Sesión iniciada como {admin.email}
+              Sesión iniciada como {admin.nombre}
             </p>
           </div>
 

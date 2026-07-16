@@ -2,6 +2,11 @@ import Link from "next/link";
 
 import { Button } from "@/components/ui/button";
 import { getPedidoByIdAction } from "@/modules/pedidos/actions";
+import { formatHoraEntrega } from "@/modules/pedidos/formatters";
+import {
+  getEstadoPedidoLabel,
+  getTipoEntregaLabel,
+} from "@/modules/pedidos/labels";
 
 import { CambiarEstadoPedido } from "../_components/cambiar-estado-pedido";
 
@@ -11,23 +16,6 @@ type PedidoDetallePageProps = {
   params: Promise<{
     id: string;
   }>;
-};
-
-/**
- * Etiquetas visibles para no mostrar valores técnicos del enum en la UI.
- */
-const ESTADO_PEDIDO_LABEL: Record<string, string> = {
-  cotizacion: "Cotización",
-  confirmado: "Confirmado",
-  en_preparacion: "En preparación",
-  listo_para_entregar: "Listo para entregar",
-  entregado: "Entregado",
-  cancelado: "Cancelado",
-};
-
-const TIPO_ENTREGA_LABEL: Record<string, string> = {
-  recoleccion: "Recolección",
-  domicilio: "Domicilio",
 };
 
 /**
@@ -135,8 +123,7 @@ export default async function PedidoDetallePage({
 
           <div className="mt-4 rounded-lg border bg-muted/30 p-4">
             <p className="text-sm font-medium">
-              {ESTADO_PEDIDO_LABEL[pedido.estado_pedido] ??
-                pedido.estado_pedido}
+              {getEstadoPedidoLabel(pedido.estado_pedido)}
             </p>
             <p className="mt-1 text-sm text-muted-foreground">
               Estado operativo actual del pedido.
@@ -168,15 +155,14 @@ export default async function PedidoDetallePage({
             <div className="space-y-1">
               <p className="text-sm font-medium">Hora de entrega</p>
               <p className="text-sm text-muted-foreground">
-                {pedido.hora_entrega}
+                {formatHoraEntrega(pedido.hora_entrega)}
               </p>
             </div>
 
             <div className="space-y-1">
               <p className="text-sm font-medium">Tipo de entrega</p>
               <p className="text-sm text-muted-foreground">
-                {TIPO_ENTREGA_LABEL[pedido.tipo_entrega] ??
-                  pedido.tipo_entrega}
+                {getTipoEntregaLabel(pedido.tipo_entrega)}
               </p>
             </div>
 
@@ -202,9 +188,9 @@ export default async function PedidoDetallePage({
 
       <div className="overflow-hidden rounded-lg border bg-background shadow-sm">
         <div className="border-b p-4">
-          <h3 className="font-medium">Artículos del pedido</h3>
+          <h3 className="font-medium">Productos del pedido</h3>
           <p className="mt-1 text-sm text-muted-foreground">
-            Snapshot de conceptos, cantidades, precios y subtotales guardados en
+            Conceptos, cantidades, precios y subtotales guardados en
             el pedido.
           </p>
         </div>
@@ -212,10 +198,10 @@ export default async function PedidoDetallePage({
         {pedido.items.length === 0 ? (
           <div className="p-6 text-center">
             <h4 className="text-sm font-medium">
-              Este pedido no tiene artículos registrados.
+              Este pedido no tiene productos registrados.
             </h4>
             <p className="mt-2 text-sm text-muted-foreground">
-              No se encontraron items asociados al pedido.
+              No se encontraron productos asociados al pedido.
             </p>
           </div>
         ) : (

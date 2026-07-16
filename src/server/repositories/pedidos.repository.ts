@@ -178,11 +178,25 @@ export async function listPedidos(params: {
   return prisma.pedido.findMany({
     where,
     include: listInclude,
-    // Vista operativa: primero la entrega más próxima; desempata por hora y creación.
+    /**
+     * Vista operativa: primero la entrega más próxima.
+     *
+     *  1. `fecha_entrega` asc: el día de entrega manda.
+     *  2. `hora_entrega` asc: se guarda como "HH:mm" en 24 h con cero a la
+     *     izquierda, así que el orden alfabético de Postgres coincide con el
+     *     cronológico ("09:00" < "13:30" < "23:59").
+     *  3. `created_at` desc: entre entregas a la misma fecha y hora, el pedido
+     *     más reciente primero.
+     *  4. `id` asc: desempate final. `created_at` es un timestamp y dos pedidos
+     *     creados en el mismo instante podrían empatar; sin este criterio el
+     *     orden de esas filas lo decide Postgres y puede cambiar entre consultas,
+     *     duplicando o saltando filas al paginar con `take`/`skip`.
+     */
     orderBy: [
       { fecha_entrega: "asc" },
       { hora_entrega: "asc" },
       { created_at: "desc" },
+      { id: "asc" },
     ],
     take: filters.take,
     skip: filters.skip,

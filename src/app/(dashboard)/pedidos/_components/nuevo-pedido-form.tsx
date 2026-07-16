@@ -1,25 +1,29 @@
 "use client";
 
 import { useMemo, useState, type FormEvent } from "react";
-import Link from "next/link";
 import { useRouter } from "next/navigation";
 
-import { Button } from "@/components/ui/button";
 import {
   createPedidoAction,
   updatePedidoAction,
 } from "@/modules/pedidos/actions";
 
-type ClienteOption = {
+import { ClienteAsociadoInfo } from "./cliente-asociado-info";
+import { ClienteSelectorField } from "./cliente-selector-field";
+import { EntregaFields } from "./entrega-fields";
+import { PedidoFormActions } from "./pedido-form-actions";
+import { PedidoItemsSection } from "./pedido-items-section";
+
+export type ClienteOption = {
   id: string;
   nombre: string;
   telefono: string | null;
   whatsapp: string | null;
 };
 
-type TipoEntrega = "recoleccion" | "domicilio";
+export type TipoEntrega = "recoleccion" | "domicilio";
 
-type PedidoItemForm = {
+export type PedidoItemForm = {
   id: string;
   nombre_snapshot: string;
   descripcion: string;
@@ -53,7 +57,7 @@ type NuevoPedidoFormProps = {
  * Errores por campo de cada item.
  * Se usan para mostrar el mensaje debajo del input exacto que debe corregirse.
  */
-type ItemFieldErrors = {
+export type ItemFieldErrors = {
   nombre_snapshot?: string;
   cantidad?: string;
   precio_unitario?: string;
@@ -109,7 +113,7 @@ function roundMoney(value: number): number {
 /**
  * Muestra importes como moneda mexicana.
  */
-function formatMoney(value: number): string {
+export function formatMoney(value: number): string {
   return value.toLocaleString("es-MX", {
     style: "currency",
     currency: "MXN",
@@ -142,8 +146,17 @@ export function NuevoPedidoForm({
   const router = useRouter();
   const isEditMode = mode === "edit";
 
-  const [clienteId, setClienteId] = useState(initialData?.cliente.id ?? "");
-  const [clienteSearch, setClienteSearch] = useState("");
+  /**
+   * Cliente seleccionado (fuente de verdad del cliente del pedido). El
+   * `cliente_id` que se envía al backend se deriva de aquí. En edición el
+   * cliente no se cambia, pero se conserva para mostrarlo.
+   */
+  const [selectedCliente, setSelectedCliente] = useState<ClienteOption | null>(
+    initialData?.cliente ?? null,
+  );
+
+  const clienteId = selectedCliente?.id ?? "";
+
   const [fechaEntrega, setFechaEntrega] = useState(
     initialData?.fecha_entrega ?? "",
   );
@@ -182,28 +195,6 @@ export function NuevoPedidoForm({
 
   const [successMessage, setSuccessMessage] = useState<string | null>(null);
   const [isSaving, setIsSaving] = useState(false);
-
-  /**
-   * Buscador simple de clientes activos para modo creación.
-   * En edición no se cambia el cliente porque no está en el alcance.
-   */
-  const clientesFiltrados = useMemo(() => {
-    const query = clienteSearch.trim().toLowerCase();
-
-    if (!query) return clientes;
-
-    return clientes.filter((cliente) => {
-      const nombre = cliente.nombre.toLowerCase();
-      const telefono = cliente.telefono ?? "";
-      const whatsapp = cliente.whatsapp ?? "";
-
-      return (
-        nombre.includes(query) ||
-        telefono.includes(query) ||
-        whatsapp.includes(query)
-      );
-    });
-  }, [clienteSearch, clientes]);
 
   /**
    * Calcula subtotal por item.
@@ -351,14 +342,14 @@ export function NuevoPedidoForm({
     }
 
     if (items.length === 0) {
-      nextFieldErrors.itemsRequired = "Agrega al menos un item al pedido.";
+      nextFieldErrors.itemsRequired = "Agrega al menos un producto al pedido.";
     }
 
     itemsCalculados.forEach((item) => {
       const errorsForItem: ItemFieldErrors = {};
 
       if (!item.nombre_snapshot.trim()) {
-        errorsForItem.nombre_snapshot = "El nombre del item es obligatorio.";
+        errorsForItem.nombre_snapshot = "El nombre del producto es obligatorio.";
       }
 
       if (!item.cantidad || item.cantidadNumber <= 0) {
@@ -436,7 +427,6 @@ export function NuevoPedidoForm({
     );
 
     router.push(`/pedidos/${result.data.id}`);
-    router.refresh();
   }
 
   return (
@@ -450,8 +440,8 @@ export function NuevoPedidoForm({
         </h3>
         <p className="text-sm text-muted-foreground">
           {isEditMode
-            ? "Actualiza datos básicos e items del pedido."
-            : "Captura cliente, entrega e items del pedido personalizado."}
+            ? "Actualiza los datos básicos y los productos del pedido."
+            : "Captura el cliente, la entrega y los productos del pedido personalizado."}
         </p>
       </div>
 
@@ -468,361 +458,57 @@ export function NuevoPedidoForm({
       ) : null}
 
       {!isEditMode ? (
-        <div className="space-y-4">
-          <div className="space-y-2">
-            <label htmlFor="clienteSearch" className="text-sm font-medium">
-              Buscar cliente activo
-            </label>
-            <input
-              id="clienteSearch"
-              type="search"
-              value={clienteSearch}
-              onChange={(event) => setClienteSearch(event.target.value)}
-              placeholder="Buscar por nombre, teléfono o WhatsApp"
-              className="h-9 w-full rounded-lg border border-input bg-background px-3 text-sm outline-none transition-colors placeholder:text-muted-foreground focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50"
-            />
-          </div>
-
-          <div className="space-y-2">
-            <label htmlFor="clienteId" className="text-sm font-medium">
-              Cliente <span className="text-destructive">*</span>
-            </label>
-
-            <select
-              id="clienteId"
-              value={clienteId}
-              onChange={(event) => {
-                setClienteId(event.target.value);
-                clearFieldError("clienteId");
-              }}
-              className="h-9 w-full rounded-lg border border-input bg-background px-3 text-sm outline-none transition-colors focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50"
-            >
-              <option value="">Selecciona un cliente</option>
-              {clientesFiltrados.map((cliente) => (
-                <option key={cliente.id} value={cliente.id}>
-                  {cliente.nombre}
-                  {cliente.telefono ? ` — ${cliente.telefono}` : ""}
-                </option>
-              ))}
-            </select>
-
-            {fieldErrors.clienteId ? (
-              <p className="text-sm text-destructive">
-                {fieldErrors.clienteId}
-              </p>
-            ) : null}
-
-            {clientes.length === 0 ? (
-              <p className="text-sm text-muted-foreground">
-                No hay clientes activos disponibles.{" "}
-                <Link href="/clientes/nuevo" className="font-medium underline">
-                  Crear cliente
-                </Link>
-              </p>
-            ) : null}
-
-            {clientes.length > 0 && clientesFiltrados.length === 0 ? (
-              <p className="text-sm text-muted-foreground">
-                No se encontró un cliente con esa búsqueda.{" "}
-                <Link href="/clientes/nuevo" className="font-medium underline">
-                  Crear cliente
-                </Link>
-              </p>
-            ) : null}
-          </div>
-        </div>
+        <ClienteSelectorField
+          clientes={clientes}
+          value={selectedCliente}
+          onChange={(cliente) => {
+            setSelectedCliente(cliente);
+            if (cliente) {
+              clearFieldError("clienteId");
+            }
+          }}
+          error={fieldErrors.clienteId}
+        />
       ) : (
-        <div className="rounded-lg border bg-muted/30 p-4">
-          <p className="text-sm font-medium">Cliente asociado</p>
-          <p className="mt-1 text-sm text-muted-foreground">
-            {initialData?.cliente.nombre ?? "Cliente no disponible"}
-          </p>
-
-          {initialData?.cliente.id ? (
-            <div className="mt-3">
-              <Button asChild size="sm" variant="outline">
-                <Link href={`/clientes/${initialData.cliente.id}`}>
-                  Ver ficha de cliente
-                </Link>
-              </Button>
-            </div>
-          ) : null}
-        </div>
+        <ClienteAsociadoInfo cliente={initialData?.cliente} />
       )}
 
-      <div className="grid gap-4 md:grid-cols-2">
-        <div className="space-y-2">
-          <label htmlFor="fechaEntrega" className="text-sm font-medium">
-            Fecha de entrega <span className="text-destructive">*</span>
-          </label>
-          <input
-            id="fechaEntrega"
-            type="date"
-            value={fechaEntrega}
-            onChange={(event) => {
-              setFechaEntrega(event.target.value);
-              clearFieldError("fechaEntrega");
-            }}
-            className="h-9 w-full rounded-lg border border-input bg-background px-3 text-sm outline-none transition-colors focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50"
-          />
+      <EntregaFields
+        fechaEntrega={fechaEntrega}
+        onFechaEntregaChange={(value) => {
+          setFechaEntrega(value);
+          clearFieldError("fechaEntrega");
+        }}
+        fechaEntregaError={fieldErrors.fechaEntrega}
+        horaEntrega={horaEntrega}
+        onHoraEntregaChange={(value) => {
+          setHoraEntrega(value);
+          clearFieldError("horaEntrega");
+        }}
+        horaEntregaError={fieldErrors.horaEntrega}
+        tipoEntrega={tipoEntrega}
+        onTipoEntregaChange={setTipoEntrega}
+        direccionEntrega={direccionEntrega}
+        onDireccionEntregaChange={setDireccionEntrega}
+        notasInternas={notasInternas}
+        onNotasInternasChange={setNotasInternas}
+      />
 
-          {fieldErrors.fechaEntrega ? (
-            <p className="text-sm text-destructive">
-              {fieldErrors.fechaEntrega}
-            </p>
-          ) : null}
-        </div>
+      <PedidoItemsSection
+        items={itemsCalculados}
+        total={total}
+        itemsRequiredError={fieldErrors.itemsRequired}
+        itemErrors={fieldErrors.itemErrors}
+        onAddItem={addItem}
+        onRemoveItem={removeItem}
+        onUpdateItem={updateItem}
+      />
 
-        <div className="space-y-2">
-          <label htmlFor="horaEntrega" className="text-sm font-medium">
-            Hora de entrega <span className="text-destructive">*</span>
-          </label>
-          <input
-            id="horaEntrega"
-            type="time"
-            value={horaEntrega}
-            onChange={(event) => {
-              setHoraEntrega(event.target.value);
-              clearFieldError("horaEntrega");
-            }}
-            className="h-9 w-full rounded-lg border border-input bg-background px-3 text-sm outline-none transition-colors focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50"
-          />
-
-          {fieldErrors.horaEntrega ? (
-            <p className="text-sm text-destructive">
-              {fieldErrors.horaEntrega}
-            </p>
-          ) : null}
-        </div>
-
-        <div className="space-y-2 md:col-span-2">
-          <label htmlFor="tipoEntrega" className="text-sm font-medium">
-            Tipo de entrega
-          </label>
-          <select
-            id="tipoEntrega"
-            value={tipoEntrega}
-            onChange={(event) =>
-              setTipoEntrega(event.target.value as TipoEntrega)
-            }
-            className="h-9 w-full rounded-lg border border-input bg-background px-3 text-sm outline-none transition-colors focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50"
-          >
-            <option value="recoleccion">Recolección</option>
-            <option value="domicilio">Domicilio</option>
-          </select>
-        </div>
-
-        {tipoEntrega === "domicilio" ? (
-          <div className="space-y-2 md:col-span-2">
-            <label htmlFor="direccionEntrega" className="text-sm font-medium">
-              Dirección de entrega
-            </label>
-            <textarea
-              id="direccionEntrega"
-              value={direccionEntrega}
-              onChange={(event) => setDireccionEntrega(event.target.value)}
-              maxLength={300}
-              rows={3}
-              placeholder="Dirección donde se entregará el pedido"
-              className="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm outline-none transition-colors placeholder:text-muted-foreground focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50"
-            />
-          </div>
-        ) : null}
-
-        <div className="space-y-2 md:col-span-2">
-          <label htmlFor="notasInternas" className="text-sm font-medium">
-            Notas internas
-          </label>
-          <textarea
-            id="notasInternas"
-            value={notasInternas}
-            onChange={(event) => setNotasInternas(event.target.value)}
-            maxLength={1000}
-            rows={4}
-            placeholder="Indicaciones internas para el pedido"
-            className="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm outline-none transition-colors placeholder:text-muted-foreground focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50"
-          />
-        </div>
-      </div>
-
-      <div className="space-y-4 rounded-lg border p-4">
-        <div className="flex flex-col gap-2 md:flex-row md:items-center md:justify-between">
-          <div>
-            <h3 className="font-medium">Items del pedido</h3>
-            <p className="text-sm text-muted-foreground">
-              Agrega uno o más conceptos. El total se calcula desde los
-              subtotales.
-            </p>
-          </div>
-
-          <Button type="button" variant="outline" onClick={addItem}>
-            Agregar item
-          </Button>
-        </div>
-
-        {itemsCalculados.length === 0 ? (
-          <div className="rounded-lg border bg-muted/30 p-4 text-sm text-muted-foreground">
-            Agrega al menos un item para poder guardar el pedido.
-          </div>
-        ) : null}
-
-        {fieldErrors.itemsRequired ? (
-          <p className="text-sm text-destructive">
-            {fieldErrors.itemsRequired}
-          </p>
-        ) : null}
-
-        <div className="space-y-4">
-          {itemsCalculados.map((item, index) => (
-            <div key={item.id} className="rounded-lg border p-4">
-              <div className="mb-4 flex items-center justify-between gap-2">
-                <h4 className="text-sm font-medium">Item {index + 1}</h4>
-
-                <Button
-                  type="button"
-                  variant="outline"
-                  onClick={() => removeItem(item.id)}
-                >
-                  Quitar
-                </Button>
-              </div>
-
-              <div className="grid gap-4 md:grid-cols-2">
-                <div className="space-y-2 md:col-span-2">
-                  <label
-                    htmlFor={`nombre-${item.id}`}
-                    className="text-sm font-medium"
-                  >
-                    Producto o concepto{" "}
-                    <span className="text-destructive">*</span>
-                  </label>
-                  <input
-                    id={`nombre-${item.id}`}
-                    type="text"
-                    value={item.nombre_snapshot}
-                    onChange={(event) =>
-                      updateItem(
-                        item.id,
-                        "nombre_snapshot",
-                        event.target.value,
-                      )
-                    }
-                    placeholder="Ej. Pastel personalizado"
-                    className="h-9 w-full rounded-lg border border-input bg-background px-3 text-sm outline-none transition-colors placeholder:text-muted-foreground focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50"
-                  />
-
-                  {fieldErrors.itemErrors?.[item.id]?.nombre_snapshot ? (
-                    <p className="text-sm text-destructive">
-                      {fieldErrors.itemErrors[item.id]?.nombre_snapshot}
-                    </p>
-                  ) : null}
-                </div>
-
-                <div className="space-y-2 md:col-span-2">
-                  <label
-                    htmlFor={`descripcion-${item.id}`}
-                    className="text-sm font-medium"
-                  >
-                    Descripción
-                  </label>
-                  <textarea
-                    id={`descripcion-${item.id}`}
-                    value={item.descripcion}
-                    onChange={(event) =>
-                      updateItem(item.id, "descripcion", event.target.value)
-                    }
-                    placeholder="Detalle opcional del item"
-                    rows={2}
-                    className="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm outline-none transition-colors placeholder:text-muted-foreground focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50"
-                  />
-                </div>
-
-                <div className="space-y-2">
-                  <label
-                    htmlFor={`cantidad-${item.id}`}
-                    className="text-sm font-medium"
-                  >
-                    Cantidad <span className="text-destructive">*</span>
-                  </label>
-                  <input
-                    id={`cantidad-${item.id}`}
-                    type="number"
-                    min="1"
-                    step="1"
-                    value={item.cantidad}
-                    onChange={(event) =>
-                      updateItem(item.id, "cantidad", event.target.value)
-                    }
-                    className="h-9 w-full rounded-lg border border-input bg-background px-3 text-sm outline-none transition-colors focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50"
-                  />
-
-                  {fieldErrors.itemErrors?.[item.id]?.cantidad ? (
-                    <p className="text-sm text-destructive">
-                      {fieldErrors.itemErrors[item.id]?.cantidad}
-                    </p>
-                  ) : null}
-                </div>
-
-                <div className="space-y-2">
-                  <label
-                    htmlFor={`precio-${item.id}`}
-                    className="text-sm font-medium"
-                  >
-                    Precio unitario <span className="text-destructive">*</span>
-                  </label>
-                  <input
-                    id={`precio-${item.id}`}
-                    type="number"
-                    min="0"
-                    step="0.01"
-                    value={item.precio_unitario}
-                    onChange={(event) =>
-                      updateItem(item.id, "precio_unitario", event.target.value)
-                    }
-                    className="h-9 w-full rounded-lg border border-input bg-background px-3 text-sm outline-none transition-colors focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50"
-                  />
-
-                  {fieldErrors.itemErrors?.[item.id]?.precio_unitario ? (
-                    <p className="text-sm text-destructive">
-                      {fieldErrors.itemErrors[item.id]?.precio_unitario}
-                    </p>
-                  ) : null}
-                </div>
-
-                <div className="space-y-1 md:col-span-2">
-                  <p className="text-sm font-medium">Subtotal</p>
-                  <p className="text-sm text-muted-foreground">
-                    {formatMoney(item.subtotal)}
-                  </p>
-                </div>
-              </div>
-            </div>
-          ))}
-        </div>
-
-        <div className="flex justify-end border-t pt-4">
-          <div className="text-right">
-            <p className="text-sm text-muted-foreground">Total del pedido</p>
-            <p className="text-xl font-semibold">{formatMoney(total)}</p>
-          </div>
-        </div>
-      </div>
-
-      <div className="flex flex-col-reverse gap-2 md:flex-row md:justify-end">
-        <Button asChild type="button" variant="outline">
-          <Link href={cancelHref}>Cancelar</Link>
-        </Button>
-
-        <Button type="submit" disabled={isSaving}>
-          {isSaving
-            ? isEditMode
-              ? "Guardando cambios..."
-              : "Guardando..."
-            : isEditMode
-              ? "Guardar cambios"
-              : "Guardar pedido"}
-        </Button>
-      </div>
+      <PedidoFormActions
+        cancelHref={cancelHref}
+        isEditMode={isEditMode}
+        isSaving={isSaving}
+      />
     </form>
   );
 }
