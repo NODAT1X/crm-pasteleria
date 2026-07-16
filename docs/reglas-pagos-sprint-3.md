@@ -8,13 +8,20 @@ CRM / Sistema Web para Pastelería Nodatix
 
 Sprint 3 — Pagos + saldo
 
-## Issue relacionada
+## Issues relacionadas
 
-S3-002 — Preparar documento base de reglas de pagos y saldo
+- S3-002 — Preparar documento base de reglas de pagos y saldo
+- S3-011 — Actualizar reglas funcionales de pagos, saldo, devoluciones y retenciones
 
 ## Responsable funcional
 
 J0SU3-52
+
+## Estado del documento
+
+Reglas confirmadas por el dueño de la pastelería.
+
+Este documento ya no mantiene preguntas abiertas críticas para implementar Pagos + saldo en Sprint 3. Las decisiones pendientes documentadas corresponden a funcionalidades futuras o fuera del alcance del sprint actual.
 
 ---
 
@@ -25,6 +32,28 @@ Definir las reglas funcionales base para implementar el módulo de pagos y saldo
 El módulo debe permitir registrar pagos asociados a pedidos, calcular total pagado, calcular saldo pendiente, mostrar estado de pago, permitir abonos, manejar entrega con saldo pendiente y registrar cancelaciones con retención/devolución cuando existan pagos previos.
 
 Este documento sirve como base funcional para las issues técnicas de la segunda parte del Sprint 3.
+
+---
+
+# 1.1 Actualización funcional S3-011
+
+Esta actualización formaliza las reglas confirmadas por el dueño de la pastelería para implementar la segunda parte del Sprint 3.
+
+Las reglas confirmadas son:
+
+- El anticipo para confirmar pedido es del 50% del total.
+- Los métodos de pago activos para el MVP son efectivo y transferencia.
+- Tarjeta, terminal bancaria y Mercado Pago quedan para versión futura.
+- Se aceptan abonos parciales, aunque son casos poco frecuentes.
+- Las transferencias se registran con referencia o nota.
+- La carga de captura/comprobante de transferencia queda fuera de Sprint 3.
+- Un pedido puede entregarse con saldo pendiente, pero debe mostrar advertencia.
+- Si un pedido se cancela y ya tenía anticipo, la pastelería retiene el 25% del anticipo pagado.
+- El resto del anticipo se devuelve al cliente.
+- El costo de envío se maneja como concepto/item adicional del pedido.
+- Los límites de capacidad quedan para Sprint 4 / Calendario operativo.
+
+Con esta actualización, el documento funciona como contrato funcional para las issues técnicas de pagos, saldo, historial financiero, anulación, entrega con saldo pendiente y cancelación con retención/devolución.
 
 ---
 
