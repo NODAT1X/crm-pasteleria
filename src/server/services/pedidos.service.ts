@@ -5,7 +5,11 @@ import type { Cliente } from "@/generated/prisma/client";
 import type { MovimientoFinanciero } from "@/generated/prisma/client";
 import { EstadoPedido } from "@/generated/prisma/enums";
 import { findClienteById } from "@/server/repositories/clientes.repository";
-import { findMovimientosAplicadosByPedidoIds } from "@/server/repositories/movimientos-financieros.repository";
+import {
+  findMovimientosAplicadosByPedido,
+  findMovimientosAplicadosByPedidoIds,
+  findPedidoFinanciero,
+} from "@/server/repositories/movimientos-financieros.repository";
 import {
   createPedidoWithItems,
   findPedidoDetalle,
@@ -18,7 +22,12 @@ import {
   type PedidoListPayload,
   type UpdatePedidoScalarData,
 } from "@/server/repositories/pedidos.repository";
-import { derivarEstadoPago, sumarPagosAplicados } from "@/server/services/pagos.service";
+import {
+  derivarEstadoPago,
+  evaluarAnticipoConfirmacion,
+  mensajeAnticipoInsuficiente,
+  sumarPagosAplicados,
+} from "@/server/services/pagos.service";
 import {
   changeEstadoPedidoSchema,
   createPedidoSchema,
@@ -422,6 +431,38 @@ export async function changeEstadoPedidoService(
   );
   if (!transicion.ok) {
     throw new PedidoServiceError(transicion.error);
+  }
+
+  // Regla S3-018: pasar de `cotizacion` a `confirmado` exige un anticipo mínimo
+  // del 50% del total. Se calcula SIEMPRE en backend con Decimal, leyendo el
+  // total y los movimientos aplicados desde la BD (nunca desde la UI). Las demás
+  // transiciones no se ven afectadas.
+  if (
+    actual.estado_pedido === EstadoPedido.cotizacion &&
+    estado_pedido === EstadoPedido.confirmado
+  ) {
+    const pedidoFinanciero = await findPedidoFinanciero({
+      pasteleriaId,
+      pedidoId: pedido_id,
+    });
+    if (!pedidoFinanciero) {
+      throw new PedidoServiceError(
+        "El pedido no existe o no pertenece a tu pastelería.",
+      );
+    }
+
+    const movimientosAplicados = await findMovimientosAplicadosByPedido({
+      pasteleriaId,
+      pedidoId: pedido_id,
+    });
+
+    const anticipo = evaluarAnticipoConfirmacion(
+      pedidoFinanciero.total,
+      movimientosAplicados,
+    );
+    if (!anticipo.cumple) {
+      throw new PedidoServiceError(mensajeAnticipoInsuficiente(anticipo));
+    }
   }
 
   const pedido = await updateEstadoPedido({

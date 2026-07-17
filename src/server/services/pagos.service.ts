@@ -23,6 +23,7 @@ import {
 } from "@/validation/pagos";
 
 import type {
+  AnticipoConfirmacionDTO,
   EstadoPagoDerivado,
   MovimientoConResumenDTO,
   MovimientoFinancieroDTO,
@@ -163,6 +164,84 @@ function buildResumen(
     saldo_pendiente: saldoPendiente.toNumber(),
     estado_pago: derivarEstadoPago(pedido.total, totalPagado),
     movimientos_count: movimientosAplicados.length,
+  };
+}
+
+// --- Anticipo mínimo para confirmar (S3-018) ---------------------------------
+
+/**
+ * Fracción del total exigida como anticipo mínimo para pasar un pedido de
+ * `cotizacion` a `confirmado`: 50%. Se define como Decimal (nunca 0.5 Float)
+ * para que el cálculo `total * 0.50` sea exacto.
+ */
+export const ANTICIPO_MINIMO_FRACCION = new Prisma.Decimal("0.5");
+
+/**
+ * Evaluación del anticipo mínimo (todo en Decimal). Función PURA: la reutilizan
+ * tanto la lectura para UI (`obtenerAnticipoConfirmacionPedidoService`) como la
+ * regla de confirmación en `pedidos.service.ts`, así el 50% vive en un solo
+ * lugar.
+ */
+export type AnticipoConfirmacion = {
+  totalPedido: Prisma.Decimal;
+  anticipoRequerido: Prisma.Decimal;
+  anticipoRegistrado: Prisma.Decimal;
+  faltante: Prisma.Decimal;
+  cumple: boolean;
+};
+
+/**
+ * Calcula el anticipo requerido (50% del total), el registrado (total pagado
+ * aplicado) y el faltante. `anticipo_registrado` usa exactamente la misma regla
+ * que el resumen (`sumarPagosAplicados`): solo movimientos tipo `pago` y estado
+ * `aplicado`.
+ */
+export function evaluarAnticipoConfirmacion(
+  totalPedido: Prisma.Decimal,
+  movimientosAplicados: MovimientoFinanciero[],
+): AnticipoConfirmacion {
+  const anticipoRegistrado = sumarPagosAplicados(movimientosAplicados);
+  const anticipoRequerido = totalPedido.times(ANTICIPO_MINIMO_FRACCION);
+  const cumple = anticipoRegistrado.greaterThanOrEqualTo(anticipoRequerido);
+  const faltanteBruto = anticipoRequerido.minus(anticipoRegistrado);
+  const faltante = faltanteBruto.isNegative() ? DECIMAL_CERO : faltanteBruto;
+
+  return {
+    totalPedido,
+    anticipoRequerido,
+    anticipoRegistrado,
+    faltante,
+    cumple,
+  };
+}
+
+/**
+ * Mensaje de negocio (en español) cuando el anticipo no alcanza para confirmar.
+ * Vive junto a la regla para que enforcement y texto no se separen.
+ */
+export function mensajeAnticipoInsuficiente(
+  anticipo: AnticipoConfirmacion,
+): string {
+  return (
+    "Para confirmar este pedido se requiere un anticipo mínimo del 50%. " +
+    `Requerido: $${anticipo.anticipoRequerido.toFixed(2)}. ` +
+    `Registrado: $${anticipo.anticipoRegistrado.toFixed(2)}. ` +
+    `Faltante: $${anticipo.faltante.toFixed(2)}.`
+  );
+}
+
+function toAnticipoConfirmacionDTO(
+  pedidoId: string,
+  anticipo: AnticipoConfirmacion,
+): AnticipoConfirmacionDTO {
+  return {
+    pedido_id: pedidoId,
+    // `Decimal` -> `number` solo como representación de salida (ver types.ts).
+    total_pedido: anticipo.totalPedido.toNumber(),
+    anticipo_requerido: anticipo.anticipoRequerido.toNumber(),
+    anticipo_registrado: anticipo.anticipoRegistrado.toNumber(),
+    faltante: anticipo.faltante.toNumber(),
+    cumple: anticipo.cumple,
   };
 }
 
@@ -355,6 +434,37 @@ export async function obtenerResumenFinancieroPedidoService(
   });
 
   return buildResumen(pedido, aplicados);
+}
+
+/**
+ * Evaluación del anticipo mínimo para confirmar un pedido del tenant (S3-018),
+ * calculada SIEMPRE desde la BD (total del pedido + movimientos aplicados).
+ * Pensada como ayuda visual del detalle; la confirmación la sigue bloqueando
+ * `changeEstadoPedidoService`.
+ */
+export async function obtenerAnticipoConfirmacionPedidoService(
+  pasteleriaId: string,
+  input: unknown,
+): Promise<AnticipoConfirmacionDTO> {
+  const parsed = pedidoFinancieroQuerySchema.safeParse(input);
+  if (!parsed.success) {
+    throw new PagoServiceError(formatZodError(parsed.error));
+  }
+
+  const pedido = await assertPedidoDelTenant({
+    pasteleriaId,
+    pedidoId: parsed.data.pedido_id,
+  });
+
+  const aplicados = await findMovimientosAplicadosByPedido({
+    pasteleriaId,
+    pedidoId: parsed.data.pedido_id,
+  });
+
+  return toAnticipoConfirmacionDTO(
+    pedido.id,
+    evaluarAnticipoConfirmacion(pedido.total, aplicados),
+  );
 }
 
 /**
