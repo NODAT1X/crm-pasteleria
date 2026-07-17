@@ -14,7 +14,6 @@ import {
 } from "@/modules/pedidos/labels";
 
 import { CambiarEstadoPedido } from "../_components/cambiar-estado-pedido";
-import { RegistrarPagoForm } from "../_components/registrar-pago-form";
 
 export const dynamic = "force-dynamic";
 
@@ -182,11 +181,6 @@ export default async function PedidoDetallePage({
                   {getEstadoPagoLabel(resumenResult.data.estado_pago)}
                 </span>
               </div>
-
-              <RegistrarPagoForm
-                pedidoId={pedido.id}
-                saldoPendiente={resumenResult.data.saldo_pendiente}
-              />
             </div>
           ) : (
             <p className="mt-4 text-sm text-muted-foreground">
