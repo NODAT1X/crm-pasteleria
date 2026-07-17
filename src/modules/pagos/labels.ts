@@ -1,3 +1,9 @@
+import type {
+  EstadoMovimientoPago,
+  MetodoPago,
+  TipoMovimientoPago,
+  TipoPago,
+} from "@/generated/prisma/enums";
 import type { EstadoPagoDerivado } from "@/modules/pagos/types";
 
 /**
@@ -39,4 +45,87 @@ export function getEstadoPagoLabel(estado: EstadoPagoDerivado): string {
 /** Clases del badge visual del estado de pago. */
 export function getEstadoPagoBadgeClass(estado: EstadoPagoDerivado): string {
   return ESTADO_PAGO_BADGE_CLASS[estado] ?? ESTADO_PAGO_FALLBACK_BADGE_CLASS;
+}
+
+/**
+ * Etiquetas del historial financiero (S3-017): tipo de movimiento, estado del
+ * movimiento, tipo de pago y método de pago. Mismo criterio que
+ * `ESTADO_PAGO_LABEL`: solo texto/clases de presentación, nunca cambian el
+ * valor del enum ni las reglas de negocio.
+ */
+
+export const TIPO_MOVIMIENTO_PAGO_LABEL: Record<TipoMovimientoPago, string> = {
+  pago: "Pago",
+  devolucion: "Devolución",
+  retencion: "Retención",
+};
+
+export const ESTADO_MOVIMIENTO_PAGO_LABEL: Record<EstadoMovimientoPago, string> = {
+  aplicado: "Aplicado",
+  anulado: "Anulado",
+};
+
+// Clases Tailwind del badge por estado del movimiento (distinto del estado de
+// pago del pedido: aquí solo hay dos valores posibles).
+export const ESTADO_MOVIMIENTO_PAGO_BADGE_CLASS: Record<
+  EstadoMovimientoPago,
+  string
+> = {
+  aplicado: "bg-green-100 text-green-700",
+  anulado: "bg-muted text-muted-foreground",
+};
+
+export const METODO_PAGO_LABEL: Record<MetodoPago, string> = {
+  efectivo: "Efectivo",
+  transferencia: "Transferencia",
+};
+
+export const TIPO_PAGO_LABEL: Record<TipoPago, string> = {
+  anticipo: "Anticipo",
+  abono: "Abono",
+  liquidacion: "Liquidación",
+};
+
+const TIPO_MOVIMIENTO_PAGO_FALLBACK_LABEL = "Movimiento no disponible";
+const ESTADO_MOVIMIENTO_PAGO_FALLBACK_LABEL = "Estado no disponible";
+const ESTADO_MOVIMIENTO_PAGO_FALLBACK_BADGE_CLASS =
+  "bg-muted text-muted-foreground";
+const METODO_PAGO_FALLBACK_LABEL = "No especificado";
+const TIPO_PAGO_FALLBACK_LABEL = "No especificado";
+
+/** Etiqueta visible del tipo de movimiento (pago, devolución, retención). */
+export function getTipoMovimientoPagoLabel(tipo: TipoMovimientoPago): string {
+  return TIPO_MOVIMIENTO_PAGO_LABEL[tipo] ?? TIPO_MOVIMIENTO_PAGO_FALLBACK_LABEL;
+}
+
+/** Etiqueta visible del estado del movimiento (aplicado/anulado). */
+export function getEstadoMovimientoPagoLabel(
+  estado: EstadoMovimientoPago,
+): string {
+  return (
+    ESTADO_MOVIMIENTO_PAGO_LABEL[estado] ??
+    ESTADO_MOVIMIENTO_PAGO_FALLBACK_LABEL
+  );
+}
+
+/** Clases del badge visual del estado del movimiento. */
+export function getEstadoMovimientoPagoBadgeClass(
+  estado: EstadoMovimientoPago,
+): string {
+  return (
+    ESTADO_MOVIMIENTO_PAGO_BADGE_CLASS[estado] ??
+    ESTADO_MOVIMIENTO_PAGO_FALLBACK_BADGE_CLASS
+  );
+}
+
+/** Etiqueta visible del método de pago (opcional: devoluciones/retenciones). */
+export function getMetodoPagoLabel(metodo: MetodoPago | null): string {
+  if (!metodo) return METODO_PAGO_FALLBACK_LABEL;
+  return METODO_PAGO_LABEL[metodo] ?? METODO_PAGO_FALLBACK_LABEL;
+}
+
+/** Etiqueta visible del tipo de pago (opcional: solo aplica a `tipo_movimiento = pago`). */
+export function getTipoPagoLabel(tipo: TipoPago | null): string {
+  if (!tipo) return TIPO_PAGO_FALLBACK_LABEL;
+  return TIPO_PAGO_LABEL[tipo] ?? TIPO_PAGO_FALLBACK_LABEL;
 }

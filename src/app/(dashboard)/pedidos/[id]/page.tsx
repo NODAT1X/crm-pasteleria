@@ -1,7 +1,10 @@
 import Link from "next/link";
 
 import { Button } from "@/components/ui/button";
-import { obtenerResumenFinancieroPedidoAction } from "@/modules/pagos/actions";
+import {
+  listarMovimientosFinancierosAction,
+  obtenerResumenFinancieroPedidoAction,
+} from "@/modules/pagos/actions";
 import {
   getEstadoPagoBadgeClass,
   getEstadoPagoLabel,
@@ -14,6 +17,7 @@ import {
 } from "@/modules/pedidos/labels";
 
 import { CambiarEstadoPedido } from "../_components/cambiar-estado-pedido";
+import { HistorialFinanciero } from "../_components/historial-financiero";
 
 export const dynamic = "force-dynamic";
 
@@ -56,9 +60,10 @@ export default async function PedidoDetallePage({
   params,
 }: PedidoDetallePageProps) {
   const { id } = await params;
-  const [result, resumenResult] = await Promise.all([
+  const [result, resumenResult, movimientosResult] = await Promise.all([
     getPedidoByIdAction(id),
     obtenerResumenFinancieroPedidoAction({ pedido_id: id }),
+    listarMovimientosFinancierosAction({ pedido_id: id }),
   ]);
 
   /**
@@ -303,6 +308,17 @@ export default async function PedidoDetallePage({
           </div>
         </div>
       </div>
+
+      {movimientosResult.ok ? (
+        <HistorialFinanciero movimientos={movimientosResult.data} />
+      ) : (
+        <div className="rounded-lg border bg-background p-6 shadow-sm">
+          <h3 className="font-medium">Historial financiero</h3>
+          <p className="mt-4 text-sm text-muted-foreground">
+            {movimientosResult.error}
+          </p>
+        </div>
+      )}
     </section>
   );
 }
