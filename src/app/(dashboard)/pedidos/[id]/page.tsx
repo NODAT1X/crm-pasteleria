@@ -145,10 +145,10 @@ export default async function PedidoDetallePage({
           </div>
 
           <div className="mt-4 space-y-2">
-            <p className="text-sm font-medium">Cambiar estado</p>
             <CambiarEstadoPedido
               pedidoId={pedido.id}
               estadoActual={pedido.estado_pedido}
+              saldoPendiente={resumenResult.ok ? resumenResult.data.saldo_pendiente : 0}
             />
           </div>
         </aside>
