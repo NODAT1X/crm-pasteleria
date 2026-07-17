@@ -102,7 +102,11 @@ function montoToDecimalString(monto: number): string {
  * `tipo_movimiento = pago` y `estado = aplicado`. Devoluciones, retenciones y
  * movimientos anulados NO suman (regla S3-014).
  */
-function sumarPagosAplicados(
+/**
+ * Exportada para que `pedidos.service.ts` la reutilice al enriquecer el
+ * listado con el resumen financiero (S3-015), sin duplicar esta regla.
+ */
+export function sumarPagosAplicados(
   movimientos: MovimientoFinanciero[],
 ): Prisma.Decimal {
   return movimientos
@@ -120,7 +124,11 @@ function sumarPagosAplicados(
  *  - `pagado`:   total_pagado >= total_pedido
  *  - `parcial`:  el resto (0 < total_pagado < total_pedido)
  */
-function derivarEstadoPago(
+/**
+ * Exportada para que `pedidos.service.ts` la reutilice al enriquecer el
+ * listado con el resumen financiero (S3-015), sin duplicar esta regla.
+ */
+export function derivarEstadoPago(
   totalPedido: Prisma.Decimal,
   totalPagado: Prisma.Decimal,
 ): EstadoPagoDerivado {

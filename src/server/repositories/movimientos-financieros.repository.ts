@@ -129,6 +129,31 @@ export async function findMovimientosAplicadosByPedido(params: {
   });
 }
 
+/**
+ * Movimientos APLICADOS de varios pedidos del tenant en una sola consulta
+ * (evita N+1 al enriquecer un listado de pedidos con su resumen financiero).
+ * Sin orden particular: quien la consuma agrupa por `pedido_id`.
+ */
+export async function findMovimientosAplicadosByPedidoIds(params: {
+  pasteleriaId: string;
+  pedidoIds: string[];
+  db?: Prisma.TransactionClient;
+}): Promise<MovimientoFinanciero[]> {
+  const { pasteleriaId, pedidoIds, db = prisma } = params;
+
+  if (pedidoIds.length === 0) {
+    return [];
+  }
+
+  return db.movimientoFinanciero.findMany({
+    where: {
+      pasteleria_id: pasteleriaId,
+      pedido_id: { in: pedidoIds },
+      estado: EstadoMovimientoPago.aplicado,
+    },
+  });
+}
+
 /** Un movimiento por id dentro del tenant (o `null`). */
 export async function findMovimientoById(params: {
   pasteleriaId: string;

@@ -1,6 +1,11 @@
 import Link from "next/link";
 
 import { Button } from "@/components/ui/button";
+import { obtenerResumenFinancieroPedidoAction } from "@/modules/pagos/actions";
+import {
+  getEstadoPagoBadgeClass,
+  getEstadoPagoLabel,
+} from "@/modules/pagos/labels";
 import { getPedidoByIdAction } from "@/modules/pedidos/actions";
 import { formatHoraEntrega } from "@/modules/pedidos/formatters";
 import {
@@ -51,7 +56,10 @@ export default async function PedidoDetallePage({
   params,
 }: PedidoDetallePageProps) {
   const { id } = await params;
-  const result = await getPedidoByIdAction(id);
+  const [result, resumenResult] = await Promise.all([
+    getPedidoByIdAction(id),
+    obtenerResumenFinancieroPedidoAction({ pedido_id: id }),
+  ]);
 
   /**
    * Estado controlado para pedido inexistente o fuera del tenant actual.
@@ -100,7 +108,7 @@ export default async function PedidoDetallePage({
         </div>
       </div>
 
-      <div className="grid gap-6 lg:grid-cols-[2fr_1fr]">
+      <div className="grid gap-6 lg:grid-cols-[2fr_1fr_1fr]">
         <div className="rounded-lg border bg-background p-6 shadow-sm">
           <h3 className="font-medium">Cliente asociado</h3>
 
@@ -137,6 +145,48 @@ export default async function PedidoDetallePage({
               estadoActual={pedido.estado_pedido}
             />
           </div>
+        </aside>
+
+        <aside className="rounded-lg border bg-background p-6 shadow-sm">
+          <h3 className="font-medium">Resumen de pago</h3>
+
+          {resumenResult.ok ? (
+            <div className="mt-4 space-y-3">
+              <div>
+                <p className="text-xs text-muted-foreground">
+                  Total del pedido
+                </p>
+                <p className="text-sm font-medium">
+                  {formatMoney(resumenResult.data.total_pedido)}
+                </p>
+              </div>
+              <div>
+                <p className="text-xs text-muted-foreground">Total pagado</p>
+                <p className="text-sm font-medium">
+                  {formatMoney(resumenResult.data.total_pagado)}
+                </p>
+              </div>
+              <div>
+                <p className="text-xs text-muted-foreground">
+                  Saldo pendiente
+                </p>
+                <p className="text-sm font-medium">
+                  {formatMoney(resumenResult.data.saldo_pendiente)}
+                </p>
+              </div>
+              <div>
+                <span
+                  className={`inline-flex items-center rounded-full px-2.5 py-0.5 text-xs font-medium ${getEstadoPagoBadgeClass(resumenResult.data.estado_pago)}`}
+                >
+                  {getEstadoPagoLabel(resumenResult.data.estado_pago)}
+                </span>
+              </div>
+            </div>
+          ) : (
+            <p className="mt-4 text-sm text-muted-foreground">
+              {resumenResult.error}
+            </p>
+          )}
         </aside>
       </div>
 

@@ -1,8 +1,11 @@
 import { z } from "zod";
 
+import { Prisma } from "@/generated/prisma/client";
 import type { Cliente } from "@/generated/prisma/client";
+import type { MovimientoFinanciero } from "@/generated/prisma/client";
 import { EstadoPedido } from "@/generated/prisma/enums";
 import { findClienteById } from "@/server/repositories/clientes.repository";
+import { findMovimientosAplicadosByPedidoIds } from "@/server/repositories/movimientos-financieros.repository";
 import {
   createPedidoWithItems,
   findPedidoDetalle,
@@ -15,6 +18,7 @@ import {
   type PedidoListPayload,
   type UpdatePedidoScalarData,
 } from "@/server/repositories/pedidos.repository";
+import { derivarEstadoPago, sumarPagosAplicados } from "@/server/services/pagos.service";
 import {
   changeEstadoPedidoSchema,
   createPedidoSchema,
@@ -167,7 +171,22 @@ function toItemDTO(item: PedidoDetallePayload["items"][number]): PedidoItemDTO {
   };
 }
 
-function toListItemDTO(pedido: PedidoListPayload): PedidoListItemDTO {
+/**
+ * `movimientosAplicados` ya viene filtrado a este pedido (agrupado en
+ * `listPedidosService` desde una única consulta batch). El cálculo de total
+ * pagado / saldo / estado de pago reutiliza las mismas funciones puras de
+ * `pagos.service.ts` — no se reimplementa la regla aquí.
+ */
+function toListItemDTO(
+  pedido: PedidoListPayload,
+  movimientosAplicados: MovimientoFinanciero[],
+): PedidoListItemDTO {
+  const totalPagado = sumarPagosAplicados(movimientosAplicados);
+  const saldoBruto = pedido.total.minus(totalPagado);
+  const saldoPendiente = saldoBruto.isNegative()
+    ? new Prisma.Decimal(0)
+    : saldoBruto;
+
   return {
     id: pedido.id,
     cliente_id: pedido.cliente_id,
@@ -186,6 +205,9 @@ function toListItemDTO(pedido: PedidoListPayload): PedidoListItemDTO {
       telefono: pedido.cliente.telefono,
       whatsapp: pedido.cliente.whatsapp,
     },
+    total_pagado: totalPagado.toNumber(),
+    saldo_pendiente: saldoPendiente.toNumber(),
+    estado_pago: derivarEstadoPago(pedido.total, totalPagado),
   };
 }
 
@@ -252,7 +274,24 @@ export async function listPedidosService(
   }
 
   const pedidos = await listPedidos({ pasteleriaId, filters: parsed.data });
-  return pedidos.map(toListItemDTO);
+
+  // Resumen financiero del listado en UNA sola consulta batch adicional
+  // (evita N+1: sin importar cuántos pedidos haya, siempre son 2 queries).
+  const movimientos = await findMovimientosAplicadosByPedidoIds({
+    pasteleriaId,
+    pedidoIds: pedidos.map((pedido) => pedido.id),
+  });
+
+  const movimientosPorPedido = new Map<string, MovimientoFinanciero[]>();
+  for (const movimiento of movimientos) {
+    const lista = movimientosPorPedido.get(movimiento.pedido_id) ?? [];
+    lista.push(movimiento);
+    movimientosPorPedido.set(movimiento.pedido_id, lista);
+  }
+
+  return pedidos.map((pedido) =>
+    toListItemDTO(pedido, movimientosPorPedido.get(pedido.id) ?? []),
+  );
 }
 
 export async function getPedidoByIdService(

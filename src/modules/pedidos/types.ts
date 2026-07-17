@@ -2,6 +2,7 @@ import type { z } from "zod";
 
 import type { Cliente } from "@/generated/prisma/client";
 import type { EstadoPedido, TipoEntrega } from "@/generated/prisma/enums";
+import type { EstadoPagoDerivado } from "@/modules/pagos/types";
 import type {
   createPedidoSchema,
   updatePedidoSchema,
@@ -67,8 +68,14 @@ type PedidoBaseDTO = {
 };
 
 // Elemento del listado: incluye un resumen del cliente, sin items.
+// `total_pagado`/`saldo_pendiente`/`estado_pago` se calculan en el service
+// reutilizando la misma lógica de `pagos.service.ts` (S3-015): nunca se
+// recalculan en la UI.
 export type PedidoListItemDTO = PedidoBaseDTO & {
   cliente: ClienteResumenDTO;
+  total_pagado: number;
+  saldo_pendiente: number;
+  estado_pago: EstadoPagoDerivado;
 };
 
 // Detalle completo: cliente completo + items del pedido.
