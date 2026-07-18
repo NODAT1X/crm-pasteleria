@@ -400,6 +400,25 @@ export const changeEstadoPedidoSchema = z.object({
   estado_pedido: estadoPedidoValido,
 });
 
+/**
+ * Schema para CANCELAR un pedido con retención/devolución (S3-019). Solo acepta
+ * `pedido_id`: los montos de retención y devolución se calculan SIEMPRE en el
+ * backend desde los movimientos aplicados, nunca vienen del frontend. Es
+ * estricto: rechaza `pasteleria_id`, `retencion`, `devolucion`,
+ * `total_recibido`, `anticipo_aplicado`, `estado` o cualquier otro campo.
+ */
+export const cancelarPedidoSchema = z.strictObject(
+  {
+    pedido_id: pedidoIdSchema,
+  },
+  {
+    error: (issue) =>
+      issue.code === "unrecognized_keys"
+        ? `Se recibieron campos no permitidos: ${issue.keys.join(", ")}.`
+        : undefined,
+  },
+);
+
 // --- Reglas de transición de estado (centralizadas) -------------------------
 
 export type EstadoPedidoValue = EstadoPedido;
@@ -493,4 +512,5 @@ export type CreatePedidoInput = z.infer<typeof createPedidoSchema>;
 export type UpdatePedidoInput = z.infer<typeof updatePedidoSchema>;
 export type ListPedidosInput = z.infer<typeof listPedidosSchema>;
 export type ChangeEstadoPedidoInput = z.infer<typeof changeEstadoPedidoSchema>;
+export type CancelarPedidoInput = z.infer<typeof cancelarPedidoSchema>;
 export type PedidoIdInput = z.infer<typeof pedidoIdSchema>;

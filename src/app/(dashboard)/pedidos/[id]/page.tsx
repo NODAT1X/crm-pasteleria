@@ -93,10 +93,18 @@ export default async function PedidoDetallePage({
 
   const pedido = result.data;
 
+  // Estados finales: un pedido entregado o cancelado ya no se edita.
+  const esEstadoFinal =
+    pedido.estado_pedido === "cancelado" ||
+    pedido.estado_pedido === "entregado";
+
+  // En un pedido cancelado no se registran pagos.
+  // En entregado sí se permite, por S3-021.
+  const permiteRegistrarPago = pedido.estado_pedido !== "cancelado";
+
   // El anticipo registrado forma parte de la `key` de `CambiarEstadoPedido`:
-  // cuando cambia (p. ej. tras registrar un pago), React remonta el componente
-  // y descarta su estado de error local, que de otro modo quedaría obsoleto tras
-  // el refresh del Server Component.
+  // cuando cambia, React remonta el componente y limpia errores locales
+  // obsoletos que de otro modo quedarían tras un refresh del Server Component.
   const anticipoRegistradoKey = anticipoResult.ok
     ? anticipoResult.data.anticipo_registrado
     : 0;
@@ -120,9 +128,11 @@ export default async function PedidoDetallePage({
             <Link href="/pedidos">Volver al listado</Link>
           </Button>
 
-          <Button asChild variant="outline">
-            <Link href={`/pedidos/${pedido.id}/editar`}>Editar pedido</Link>
-          </Button>
+          {esEstadoFinal ? null : (
+            <Button asChild variant="outline">
+              <Link href={`/pedidos/${pedido.id}/editar`}>Editar pedido</Link>
+            </Button>
+          )}
         </div>
       </div>
 
@@ -208,10 +218,12 @@ export default async function PedidoDetallePage({
                 </span>
               </div>
 
-              <RegistrarPagoForm
-                pedidoId={pedido.id}
-                saldoPendiente={resumenResult.data.saldo_pendiente}
-              />
+              {permiteRegistrarPago ? (
+                <RegistrarPagoForm
+                  pedidoId={pedido.id}
+                  saldoPendiente={resumenResult.data.saldo_pendiente}
+                />
+              ) : null}
             </div>
           ) : (
             <p className="mt-4 text-sm text-muted-foreground">

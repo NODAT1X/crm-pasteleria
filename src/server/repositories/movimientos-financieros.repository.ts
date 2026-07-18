@@ -2,6 +2,7 @@ import { Prisma } from "@/generated/prisma/client";
 import type { MovimientoFinanciero } from "@/generated/prisma/client";
 import { EstadoMovimientoPago } from "@/generated/prisma/enums";
 import type {
+  EstadoPedido,
   MetodoPago,
   TipoMovimientoPago,
   TipoPago,
@@ -59,14 +60,16 @@ export type MovimientoFinancieroCreateData = {
 export type PedidoFinancieroPayload = {
   id: string;
   total: Prisma.Decimal;
+  estado_pedido: EstadoPedido;
 };
 
 /**
- * Datos mínimos del pedido para cálculos financieros (`id` + `total`). Lectura
- * de SOLO consulta sobre Pedido (no lo modifica): vive aquí y no en
- * pedidos.repository porque el resumen financiero necesita leer el total dentro
- * de la MISMA transacción que los movimientos. Devuelve `null` si el pedido no
- * existe o pertenece a otro tenant.
+ * Datos mínimos del pedido para cálculos financieros (`id`, `total` y
+ * `estado_pedido`). Lectura de SOLO consulta sobre Pedido (no lo modifica): vive
+ * aquí y no en pedidos.repository porque el resumen financiero necesita leer el
+ * total dentro de la MISMA transacción que los movimientos. `estado_pedido`
+ * permite bloquear pagos en pedidos cancelados (S3-019). Devuelve `null` si el
+ * pedido no existe o pertenece a otro tenant.
  */
 export async function findPedidoFinanciero(params: {
   pasteleriaId: string;
@@ -77,7 +80,7 @@ export async function findPedidoFinanciero(params: {
 
   return db.pedido.findFirst({
     where: { id: pedidoId, pasteleria_id: pasteleriaId },
-    select: { id: true, total: true },
+    select: { id: true, total: true, estado_pedido: true },
   });
 }
 

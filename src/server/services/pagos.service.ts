@@ -4,7 +4,9 @@ import { Prisma } from "@/generated/prisma/client";
 import type { MovimientoFinanciero } from "@/generated/prisma/client";
 import {
   EstadoMovimientoPago,
+  EstadoPedido,
   TipoMovimientoPago,
+  TipoPago,
 } from "@/generated/prisma/enums";
 import {
   anularMovimientoFinanciero,
@@ -117,6 +119,76 @@ export function sumarPagosAplicados(
         movimiento.estado === EstadoMovimientoPago.aplicado,
     )
     .reduce((total, movimiento) => total.plus(movimiento.monto), DECIMAL_CERO);
+}
+
+/**
+ * Anticipo aplicado = suma (con Decimal) de los movimientos tipo `pago`,
+ * estado `aplicado` y `tipo_pago = anticipo`. Es un subconjunto de
+ * `sumarPagosAplicados`; se usa para calcular la retención por cancelación
+ * (S3-019).
+ */
+export function sumarAnticiposAplicados(
+  movimientos: MovimientoFinanciero[],
+): Prisma.Decimal {
+  return movimientos
+    .filter(
+      (movimiento) =>
+        movimiento.tipo_movimiento === TipoMovimientoPago.pago &&
+        movimiento.estado === EstadoMovimientoPago.aplicado &&
+        movimiento.tipo_pago === TipoPago.anticipo,
+    )
+    .reduce((total, movimiento) => total.plus(movimiento.monto), DECIMAL_CERO);
+}
+
+/**
+ * Fracción del anticipo aplicado que la pastelería retiene al cancelar un
+ * pedido con pagos: 25%. Decimal (nunca 0.25 Float) para un cálculo exacto.
+ */
+export const RETENCION_CANCELACION_FRACCION = new Prisma.Decimal("0.25");
+
+/**
+ * Resumen financiero de una cancelación (todo en Decimal). Función PURA
+ * reutilizada por la lectura para UI y por el flujo transaccional de
+ * cancelación (S3-019), así las reglas viven en un solo lugar:
+ *
+ *  - `totalRecibido`     = pagos aplicados (todos los tipos de pago).
+ *  - `anticipoAplicado`  = pagos aplicados con `tipo_pago = anticipo`.
+ *  - `retencion`         = anticipoAplicado * 25%, redondeado a 2 decimales.
+ *  - `devolucion`        = totalRecibido - retencion.
+ *  - `tienePagosAplicados` = totalRecibido > 0.
+ *
+ * Las devoluciones/retenciones previas no cuentan como pagos recibidos porque
+ * `sumarPagosAplicados`/`sumarAnticiposAplicados` solo suman `tipo_movimiento =
+ * pago`. Los movimientos anulados tampoco cuentan (filtro `aplicado`).
+ */
+export type ResumenCancelacion = {
+  totalRecibido: Prisma.Decimal;
+  anticipoAplicado: Prisma.Decimal;
+  retencion: Prisma.Decimal;
+  devolucion: Prisma.Decimal;
+  tienePagosAplicados: boolean;
+};
+
+export function calcularResumenCancelacion(
+  movimientosAplicados: MovimientoFinanciero[],
+): ResumenCancelacion {
+  const totalRecibido = sumarPagosAplicados(movimientosAplicados);
+  const anticipoAplicado = sumarAnticiposAplicados(movimientosAplicados);
+  // Redondeo a 2 decimales (half-up, default de decimal.js) para que la
+  // retención sea un monto válido de `Decimal(10, 2)`; la devolución se calcula
+  // sobre la retención ya redondeada para que ambos reconcilien con el total.
+  const retencion = anticipoAplicado
+    .times(RETENCION_CANCELACION_FRACCION)
+    .toDecimalPlaces(2);
+  const devolucion = totalRecibido.minus(retencion);
+
+  return {
+    totalRecibido,
+    anticipoAplicado,
+    retencion,
+    devolucion,
+    tienePagosAplicados: totalRecibido.greaterThan(0),
+  };
 }
 
 /**
@@ -329,6 +401,15 @@ export async function registrarPagoService(
           pedidoId: data.pedido_id,
           db: tx,
         });
+
+        // Regla S3-019: un pedido cancelado no admite nuevos pagos (evitaría
+        // movimientos posteriores a la cancelación). `entregado` NO se bloquea
+        // aquí para no interferir con S3-021 (entrega con saldo pendiente).
+        if (pedido.estado_pedido === EstadoPedido.cancelado) {
+          throw new PagoServiceError(
+            "No se pueden registrar pagos en un pedido cancelado.",
+          );
+        }
 
         const aplicados = await findMovimientosAplicadosByPedido({
           pasteleriaId,
