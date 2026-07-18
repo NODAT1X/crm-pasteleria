@@ -3,6 +3,7 @@ import Link from "next/link";
 import { Button } from "@/components/ui/button";
 import {
   listarMovimientosFinancierosAction,
+  obtenerAnticipoConfirmacionPedidoAction,
   obtenerResumenFinancieroPedidoAction,
 } from "@/modules/pagos/actions";
 import {
@@ -16,6 +17,7 @@ import {
   getTipoEntregaLabel,
 } from "@/modules/pedidos/labels";
 
+import { AnticipoConfirmacionCard } from "../_components/anticipo-confirmacion-card";
 import { CambiarEstadoPedido } from "../_components/cambiar-estado-pedido";
 import { HistorialFinanciero } from "../_components/historial-financiero";
 import { RegistrarPagoForm } from "../_components/registrar-pago-form";
@@ -61,11 +63,13 @@ export default async function PedidoDetallePage({
   params,
 }: PedidoDetallePageProps) {
   const { id } = await params;
-  const [result, resumenResult, movimientosResult] = await Promise.all([
-    getPedidoByIdAction(id),
-    obtenerResumenFinancieroPedidoAction({ pedido_id: id }),
-    listarMovimientosFinancierosAction({ pedido_id: id }),
-  ]);
+  const [result, resumenResult, movimientosResult, anticipoResult] =
+    await Promise.all([
+      getPedidoByIdAction(id),
+      obtenerResumenFinancieroPedidoAction({ pedido_id: id }),
+      listarMovimientosFinancierosAction({ pedido_id: id }),
+      obtenerAnticipoConfirmacionPedidoAction({ pedido_id: id }),
+    ]);
 
   /**
    * Estado controlado para pedido inexistente o fuera del tenant actual.
@@ -88,6 +92,14 @@ export default async function PedidoDetallePage({
   }
 
   const pedido = result.data;
+
+  // El anticipo registrado forma parte de la `key` de `CambiarEstadoPedido`:
+  // cuando cambia (p. ej. tras registrar un pago), React remonta el componente
+  // y descarta su estado de error local, que de otro modo quedaría obsoleto tras
+  // el refresh del Server Component.
+  const anticipoRegistradoKey = anticipoResult.ok
+    ? anticipoResult.data.anticipo_registrado
+    : 0;
 
   return (
     <section className="space-y-6">
@@ -114,7 +126,7 @@ export default async function PedidoDetallePage({
         </div>
       </div>
 
-      <div className="grid gap-6 lg:grid-cols-[2fr_1fr_1fr]">
+      <div className="grid items-start gap-6 lg:grid-cols-[2fr_1fr_1fr]">
         <div className="rounded-lg border bg-background p-6 shadow-sm">
           <h3 className="font-medium">Cliente asociado</h3>
 
@@ -147,10 +159,18 @@ export default async function PedidoDetallePage({
           <div className="mt-4 space-y-2">
             <p className="text-sm font-medium">Cambiar estado</p>
             <CambiarEstadoPedido
+              key={`${pedido.id}-${pedido.estado_pedido}-${anticipoRegistradoKey}`}
               pedidoId={pedido.id}
               estadoActual={pedido.estado_pedido}
             />
           </div>
+
+          {anticipoResult.ok ? (
+            <AnticipoConfirmacionCard
+              anticipo={anticipoResult.data}
+              estadoActual={pedido.estado_pedido}
+            />
+          ) : null}
         </aside>
 
         <aside className="rounded-lg border bg-background p-6 shadow-sm">
