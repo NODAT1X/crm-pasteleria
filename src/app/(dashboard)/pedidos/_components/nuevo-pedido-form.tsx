@@ -46,11 +46,23 @@ type PedidoFormInitialData = {
   }[];
 };
 
+/**
+ * Información financiera para la advertencia de edición con pagos (S3-020).
+ * Opcional: solo se pasa en modo edición cuando el pedido ya tiene pagos
+ * aplicados. No afecta la creación. Los montos vienen calculados desde backend
+ * (resumen financiero); aquí solo se muestran.
+ */
+export type PedidoPagoInfo = {
+  total_pagado: number;
+  saldo_pendiente: number;
+};
+
 type NuevoPedidoFormProps = {
   mode?: "create" | "edit";
   clientes?: ClienteOption[];
   pedidoId?: string;
   initialData?: PedidoFormInitialData;
+  pagoInfo?: PedidoPagoInfo | null;
 };
 
 /**
@@ -142,6 +154,7 @@ export function NuevoPedidoForm({
   clientes = [],
   pedidoId,
   initialData,
+  pagoInfo,
 }: NuevoPedidoFormProps) {
   const router = useRouter();
   const isEditMode = mode === "edit";
@@ -454,6 +467,39 @@ export function NuevoPedidoForm({
       {successMessage ? (
         <div className="rounded-lg border bg-muted/50 p-3 text-sm">
           {successMessage}
+        </div>
+      ) : null}
+
+      {isEditMode && pagoInfo ? (
+        <div className="rounded-lg border border-amber-200 bg-amber-50 p-3 text-amber-800">
+          <p className="text-sm font-medium">
+            Este pedido ya tiene pagos registrados.
+          </p>
+          <dl className="mt-2 space-y-1 text-xs">
+            <div className="flex items-center justify-between gap-4">
+              <dt>Total pagado aplicado</dt>
+              <dd className="font-medium">
+                {formatMoney(pagoInfo.total_pagado)}
+              </dd>
+            </div>
+            <div className="flex items-center justify-between gap-4">
+              <dt>Saldo pendiente actual</dt>
+              <dd className="font-medium">
+                {formatMoney(pagoInfo.saldo_pendiente)}
+              </dd>
+            </div>
+          </dl>
+          <p className="mt-2 text-xs">
+            Si cambias el total, el saldo pendiente se recalculará
+            automáticamente. No podrás guardar si el nuevo total queda por debajo
+            de lo ya pagado ({formatMoney(pagoInfo.total_pagado)}).
+          </p>
+          {total < pagoInfo.total_pagado ? (
+            <p className="mt-2 text-xs font-medium text-destructive">
+              El total actual del formulario ({formatMoney(total)}) es menor al
+              total pagado; ajusta los productos antes de guardar.
+            </p>
+          ) : null}
         </div>
       ) : null}
 

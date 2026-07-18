@@ -219,14 +219,16 @@ export async function findPedidoDetalle(params: {
 }
 
 // Estado actual de un pedido del tenant (para validar transiciones). Devuelve
-// `null` si no existe o pertenece a otra pastelería.
+// `null` si no existe o pertenece a otra pastelería. Acepta un `db` opcional
+// (cliente de transacción) para leer dentro de un flujo atómico (S3-019).
 export async function findPedidoEstado(params: {
   pasteleriaId: string;
   id: string;
+  db?: Prisma.TransactionClient;
 }): Promise<{ id: string; estado_pedido: EstadoPedido } | null> {
-  const { pasteleriaId, id } = params;
+  const { pasteleriaId, id, db = prisma } = params;
 
-  return prisma.pedido.findFirst({
+  return db.pedido.findFirst({
     where: { id, pasteleria_id: pasteleriaId },
     select: { id: true, estado_pedido: true },
   });
@@ -302,15 +304,20 @@ export async function updatePedidoWithItems(params: {
  * Actualiza SOLO `estado_pedido`. El filtro compuesto (id + pasteleria_id) es
  * atómico: si `count === 0`, el pedido no existe o es de otro tenant y se trata
  * como "no encontrado". La validez de la transición la garantiza el servicio.
+ *
+ * Acepta un `db` opcional (cliente de transacción) para que la cancelación con
+ * retención/devolución (S3-019) registre los movimientos y cambie el estado en
+ * un mismo flujo atómico.
  */
 export async function updateEstadoPedido(params: {
   pasteleriaId: string;
   id: string;
   estado: EstadoPedido;
+  db?: Prisma.TransactionClient;
 }): Promise<PedidoDetallePayload | null> {
-  const { pasteleriaId, id, estado } = params;
+  const { pasteleriaId, id, estado, db = prisma } = params;
 
-  const result = await prisma.pedido.updateMany({
+  const result = await db.pedido.updateMany({
     where: { id, pasteleria_id: pasteleriaId },
     data: { estado_pedido: estado },
   });
@@ -319,5 +326,10 @@ export async function updateEstadoPedido(params: {
     return null;
   }
 
-  return findPedidoDetalle({ pasteleriaId, id });
+  // Relectura del detalle con el MISMO cliente (dentro de la transacción si se
+  // pasó `db`), para no leer fuera del flujo atómico.
+  return db.pedido.findFirst({
+    where: { id, pasteleria_id: pasteleriaId },
+    include: detalleInclude,
+  });
 }
