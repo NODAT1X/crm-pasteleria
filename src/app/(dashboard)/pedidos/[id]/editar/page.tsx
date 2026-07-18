@@ -1,6 +1,7 @@
 import Link from "next/link";
 
 import { Button } from "@/components/ui/button";
+import { obtenerResumenFinancieroPedidoAction } from "@/modules/pagos/actions";
 import { getPedidoByIdAction } from "@/modules/pedidos/actions";
 
 import { NuevoPedidoForm } from "../../_components/nuevo-pedido-form";
@@ -30,7 +31,10 @@ export default async function EditarPedidoPage({
   params,
 }: EditarPedidoPageProps) {
   const { id } = await params;
-  const result = await getPedidoByIdAction(id);
+  const [result, resumenResult] = await Promise.all([
+    getPedidoByIdAction(id),
+    obtenerResumenFinancieroPedidoAction({ pedido_id: id }),
+  ]);
 
   if (!result.ok) {
     return (
@@ -51,6 +55,16 @@ export default async function EditarPedidoPage({
 
   const pedido = result.data;
   const noEsEditable = ESTADOS_NO_EDITABLES.includes(pedido.estado_pedido);
+
+  // Advertencia financiera (S3-020): solo si el pedido ya tiene pagos aplicados.
+  // Los montos vienen calculados desde backend; la UI solo los muestra.
+  const pagoInfo =
+    resumenResult.ok && resumenResult.data.total_pagado > 0
+      ? {
+          total_pagado: resumenResult.data.total_pagado,
+          saldo_pendiente: resumenResult.data.saldo_pendiente,
+        }
+      : undefined;
 
   if (noEsEditable) {
     return (
@@ -104,6 +118,7 @@ export default async function EditarPedidoPage({
       <NuevoPedidoForm
         mode="edit"
         pedidoId={pedido.id}
+        pagoInfo={pagoInfo}
         initialData={{
           cliente: {
             id: pedido.cliente.id,
