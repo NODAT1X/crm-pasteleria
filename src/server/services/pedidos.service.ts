@@ -9,6 +9,7 @@ import {
   createMovimientoFinanciero,
   findMovimientosAplicadosByPedido,
   findMovimientosAplicadosByPedidoIds,
+  findPedidoFinanciero,
   runMovimientosFinancierosTransaction,
 } from "@/server/repositories/movimientos-financieros.repository";
 import {
@@ -26,6 +27,8 @@ import {
 import {
   calcularResumenCancelacion,
   derivarEstadoPago,
+  evaluarAnticipoConfirmacion,
+  mensajeAnticipoInsuficiente,
   sumarPagosAplicados,
   type ResumenCancelacion,
 } from "@/server/services/pagos.service";
@@ -438,15 +441,46 @@ export async function changeEstadoPedidoService(
     throw new PedidoServiceError(transicion.error);
   }
 
+  // Regla S3-018: pasar de `cotizacion` a `confirmado` exige un anticipo mínimo
+  // del 50% del total.
+  if (
+    actual.estado_pedido === EstadoPedido.cotizacion &&
+    estado_pedido === EstadoPedido.confirmado
+  ) {
+    const pedidoFinanciero = await findPedidoFinanciero({
+      pasteleriaId,
+      pedidoId: pedido_id,
+    });
+
+    if (!pedidoFinanciero) {
+      throw new PedidoServiceError(
+        "El pedido no existe o no pertenece a tu pastelería.",
+      );
+    }
+
+    const movimientosAplicados = await findMovimientosAplicadosByPedido({
+      pasteleriaId,
+      pedidoId: pedido_id,
+    });
+
+    const anticipo = evaluarAnticipoConfirmacion(
+      pedidoFinanciero.total,
+      movimientosAplicados,
+    );
+
+    if (!anticipo.cumple) {
+      throw new PedidoServiceError(mensajeAnticipoInsuficiente(anticipo));
+    }
+  }
+
   // Anti-bypass S3-019: un pedido con pagos aplicados NO puede cancelarse por
-  // este flujo genérico (no registraría la retención/devolución). Debe usarse
-  // `cancelarPedidoConRetencionDevolucionService`. Sin pagos, la cancelación
-  // simple sigue permitida por aquí.
+  // este flujo genérico. Debe usarse el flujo de retención/devolución.
   if (estado_pedido === EstadoPedido.cancelado) {
     const aplicados = await findMovimientosAplicadosByPedido({
       pasteleriaId,
       pedidoId: pedido_id,
     });
+
     if (calcularResumenCancelacion(aplicados).tienePagosAplicados) {
       throw new PedidoServiceError(
         "Este pedido tiene pagos registrados. Cancélalo desde el flujo de cancelación con retención y devolución para registrar los movimientos financieros.",
