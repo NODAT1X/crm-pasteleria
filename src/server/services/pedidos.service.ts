@@ -3,11 +3,14 @@ import { z } from "zod";
 import { Prisma } from "@/generated/prisma/client";
 import type { Cliente } from "@/generated/prisma/client";
 import type { MovimientoFinanciero } from "@/generated/prisma/client";
-import { EstadoPedido } from "@/generated/prisma/enums";
+import { EstadoPedido, TipoMovimientoPago } from "@/generated/prisma/enums";
 import { findClienteById } from "@/server/repositories/clientes.repository";
 import {
+  createMovimientoFinanciero,
   findMovimientosAplicadosByPedido,
   findMovimientosAplicadosByPedidoIds,
+  findPedidoFinanciero,
+  runMovimientosFinancierosTransaction,
 } from "@/server/repositories/movimientos-financieros.repository";
 import {
   createPedidoWithItems,
@@ -21,8 +24,16 @@ import {
   type PedidoListPayload,
   type UpdatePedidoScalarData,
 } from "@/server/repositories/pedidos.repository";
-import { derivarEstadoPago, sumarPagosAplicados } from "@/server/services/pagos.service";
 import {
+  calcularResumenCancelacion,
+  derivarEstadoPago,
+  evaluarAnticipoConfirmacion,
+  mensajeAnticipoInsuficiente,
+  sumarPagosAplicados,
+  type ResumenCancelacion,
+} from "@/server/services/pagos.service";
+import {
+  cancelarPedidoSchema,
   changeEstadoPedidoSchema,
   createPedidoSchema,
   listPedidosSchema,
@@ -36,6 +47,7 @@ import type {
   PedidoDetalleDTO,
   PedidoItemDTO,
   PedidoListItemDTO,
+  ResumenCancelacionPedidoDTO,
 } from "@/modules/pedidos/types";
 
 /**
@@ -333,7 +345,9 @@ export async function updatePedidoService(
 
   const data = parsed.data;
 
-    // Regla S2-009: los pedidos en estado final no se pueden editar.
+  // Regla S2-009 / S3-019: los pedidos en estado final (entregado o cancelado)
+  // no se pueden editar. Este guard protege la Server Action ante llamadas
+  // directas, aunque la UI ya oculte el acceso a la edición.
   const actual = await findPedidoEstado({ pasteleriaId, id: parsedId.data });
 
   if (!actual) {
@@ -347,7 +361,7 @@ export async function updatePedidoService(
     actual.estado_pedido === EstadoPedido.cancelado
   ) {
     throw new PedidoServiceError(
-      "El pedido ya está entregado o cancelado y no admite edición.",
+      "Este pedido ya está finalizado y no puede editarse.",
     );
   }
 
@@ -446,6 +460,53 @@ export async function changeEstadoPedidoService(
     throw new PedidoServiceError(transicion.error);
   }
 
+  // Regla S3-018: pasar de `cotizacion` a `confirmado` exige un anticipo mínimo
+  // del 50% del total.
+  if (
+    actual.estado_pedido === EstadoPedido.cotizacion &&
+    estado_pedido === EstadoPedido.confirmado
+  ) {
+    const pedidoFinanciero = await findPedidoFinanciero({
+      pasteleriaId,
+      pedidoId: pedido_id,
+    });
+
+    if (!pedidoFinanciero) {
+      throw new PedidoServiceError(
+        "El pedido no existe o no pertenece a tu pastelería.",
+      );
+    }
+
+    const movimientosAplicados = await findMovimientosAplicadosByPedido({
+      pasteleriaId,
+      pedidoId: pedido_id,
+    });
+
+    const anticipo = evaluarAnticipoConfirmacion(
+      pedidoFinanciero.total,
+      movimientosAplicados,
+    );
+
+    if (!anticipo.cumple) {
+      throw new PedidoServiceError(mensajeAnticipoInsuficiente(anticipo));
+    }
+  }
+
+  // Anti-bypass S3-019: un pedido con pagos aplicados NO puede cancelarse por
+  // este flujo genérico. Debe usarse el flujo de retención/devolución.
+  if (estado_pedido === EstadoPedido.cancelado) {
+    const aplicados = await findMovimientosAplicadosByPedido({
+      pasteleriaId,
+      pedidoId: pedido_id,
+    });
+
+    if (calcularResumenCancelacion(aplicados).tienePagosAplicados) {
+      throw new PedidoServiceError(
+        "Este pedido tiene pagos registrados. Cancélalo desde el flujo de cancelación con retención y devolución para registrar los movimientos financieros.",
+      );
+    }
+  }
+
   const pedido = await updateEstadoPedido({
     pasteleriaId,
     id: pedido_id,
@@ -459,4 +520,193 @@ export async function changeEstadoPedidoService(
   }
 
   return toDetalleDTO(pedido);
+}
+
+// --- Cancelación con retención / devolución (S3-019) ------------------------
+
+/**
+ * Arma el DTO de resumen de cancelación a partir del cálculo puro
+ * (`calcularResumenCancelacion`) y del estado actual del pedido, agregando
+ * `puede_cancelar` (según las transiciones válidas) y un `mensaje` en español
+ * para la confirmación en UI.
+ */
+function buildResumenCancelacionDTO(params: {
+  pedidoId: string;
+  estadoActual: EstadoPedido;
+  resumen: ResumenCancelacion;
+}): ResumenCancelacionPedidoDTO {
+  const { pedidoId, estadoActual, resumen } = params;
+
+  const transicion = validateEstadoPedidoTransition(
+    estadoActual,
+    EstadoPedido.cancelado,
+  );
+
+  let mensaje: string;
+  if (!transicion.ok) {
+    // Estado final (entregado/cancelado) o transición no permitida.
+    mensaje = transicion.error;
+  } else if (resumen.tienePagosAplicados) {
+    mensaje =
+      "Este pedido tiene pagos registrados. Al cancelarlo se registrará una retención y una devolución según las reglas de la pastelería.";
+  } else {
+    mensaje =
+      "Este pedido no tiene pagos registrados. Se cancelará sin retención ni devolución.";
+  }
+
+  return {
+    pedido_id: pedidoId,
+    tiene_pagos_aplicados: resumen.tienePagosAplicados,
+    // `Decimal` -> `number` solo como representación de salida (ver types.ts).
+    total_recibido: resumen.totalRecibido.toNumber(),
+    anticipo_aplicado: resumen.anticipoAplicado.toNumber(),
+    retencion: resumen.retencion.toNumber(),
+    devolucion: resumen.devolucion.toNumber(),
+    puede_cancelar: transicion.ok,
+    mensaje,
+  };
+}
+
+/**
+ * Resumen de cancelación de un pedido del tenant: montos de retención/devolución
+ * calculados SIEMPRE en backend desde los movimientos aplicados. Es solo lectura
+ * (para mostrar la confirmación antes de cancelar); no registra nada.
+ */
+export async function obtenerResumenCancelacionPedidoService(
+  pasteleriaId: string,
+  input: unknown,
+): Promise<ResumenCancelacionPedidoDTO> {
+  const parsed = cancelarPedidoSchema.safeParse(input);
+  if (!parsed.success) {
+    throw new PedidoServiceError(formatZodError(parsed.error));
+  }
+
+  const actual = await findPedidoEstado({
+    pasteleriaId,
+    id: parsed.data.pedido_id,
+  });
+  if (!actual) {
+    throw new PedidoServiceError(
+      "El pedido no existe o no pertenece a tu pastelería.",
+    );
+  }
+
+  const aplicados = await findMovimientosAplicadosByPedido({
+    pasteleriaId,
+    pedidoId: parsed.data.pedido_id,
+  });
+
+  return buildResumenCancelacionDTO({
+    pedidoId: parsed.data.pedido_id,
+    estadoActual: actual.estado_pedido,
+    resumen: calcularResumenCancelacion(aplicados),
+  });
+}
+
+/**
+ * Cancela un pedido registrando la retención y la devolución que correspondan
+ * (S3-019), todo dentro de UNA transacción `Serializable`:
+ *
+ *  1. Lee el estado del pedido (tenant) dentro de la transacción.
+ *  2. Valida que la transición a `cancelado` sea válida desde el estado actual.
+ *  3. Lee los pagos aplicados y calcula retención/devolución con Decimal.
+ *  4. Registra la retención si es > 0.
+ *  5. Registra la devolución si es > 0.
+ *  6. Cambia el estado del pedido a `cancelado`.
+ *
+ * No borra ni edita pagos previos: el historial conserva pago + retención +
+ * devolución. Si no hay pagos aplicados, no registra movimientos y solo cancela.
+ * El aislamiento `Serializable` evita que un pago concurrente se cuele entre el
+ * cálculo y la cancelación (uno de los dos falla y se reintenta).
+ */
+export async function cancelarPedidoConRetencionDevolucionService(
+  pasteleriaId: string,
+  input: unknown,
+): Promise<PedidoDetalleDTO> {
+  const parsed = cancelarPedidoSchema.safeParse(input);
+  if (!parsed.success) {
+    throw new PedidoServiceError(formatZodError(parsed.error));
+  }
+  const { pedido_id } = parsed.data;
+
+  return runMovimientosFinancierosTransaction(
+    async (tx) => {
+      const actual = await findPedidoEstado({
+        pasteleriaId,
+        id: pedido_id,
+        db: tx,
+      });
+      if (!actual) {
+        throw new PedidoServiceError(
+          "El pedido no existe o no pertenece a tu pastelería.",
+        );
+      }
+
+      const transicion = validateEstadoPedidoTransition(
+        actual.estado_pedido,
+        EstadoPedido.cancelado,
+      );
+      if (!transicion.ok) {
+        throw new PedidoServiceError(transicion.error);
+      }
+
+      const aplicados = await findMovimientosAplicadosByPedido({
+        pasteleriaId,
+        pedidoId: pedido_id,
+        db: tx,
+      });
+      const resumen = calcularResumenCancelacion(aplicados);
+
+      // Retención: solo si es > 0 (no se crean movimientos de monto 0).
+      if (resumen.retencion.greaterThan(0)) {
+        await createMovimientoFinanciero({
+          pasteleriaId,
+          data: {
+            pedido_id,
+            // El caso de uso fija el tipo; nunca viene de la UI.
+            tipo_movimiento: TipoMovimientoPago.retencion,
+            metodo_pago: null,
+            tipo_pago: null,
+            monto: resumen.retencion.toFixed(2),
+            referencia: null,
+            notas: "Retención del 25% del anticipo por cancelación del pedido.",
+          },
+          db: tx,
+        });
+      }
+
+      // Devolución: solo si es > 0.
+      if (resumen.devolucion.greaterThan(0)) {
+        await createMovimientoFinanciero({
+          pasteleriaId,
+          data: {
+            pedido_id,
+            tipo_movimiento: TipoMovimientoPago.devolucion,
+            metodo_pago: null,
+            tipo_pago: null,
+            monto: resumen.devolucion.toFixed(2),
+            referencia: null,
+            notas:
+              "Devolución al cliente por cancelación del pedido (total recibido menos retención).",
+          },
+          db: tx,
+        });
+      }
+
+      const pedido = await updateEstadoPedido({
+        pasteleriaId,
+        id: pedido_id,
+        estado: EstadoPedido.cancelado,
+        db: tx,
+      });
+      if (!pedido) {
+        throw new PedidoServiceError(
+          "El pedido no existe o no pertenece a tu pastelería.",
+        );
+      }
+
+      return toDetalleDTO(pedido);
+    },
+    { isolationLevel: Prisma.TransactionIsolationLevel.Serializable },
+  );
 }

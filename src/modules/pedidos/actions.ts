@@ -5,10 +5,12 @@ import { revalidatePath } from "next/cache";
 import { requireAdminContext } from "@/server/auth/authorization";
 import {
   PedidoServiceError,
+  cancelarPedidoConRetencionDevolucionService,
   changeEstadoPedidoService,
   createPedidoService,
   getPedidoByIdService,
   listPedidosService,
+  obtenerResumenCancelacionPedidoService,
   updatePedidoService,
 } from "@/server/services/pedidos.service";
 
@@ -16,6 +18,7 @@ import type {
   ActionResult,
   PedidoDetalleDTO,
   PedidoListItemDTO,
+  ResumenCancelacionPedidoDTO,
 } from "./types";
 
 /**
@@ -116,6 +119,49 @@ export async function changeEstadoPedidoAction(
 
   try {
     const pedido = await changeEstadoPedidoService(pasteleriaId, input);
+    revalidatePedidoPaths(pedido.cliente_id, pedido.id);
+    return { ok: true, data: pedido };
+  } catch (error) {
+    return { ok: false, error: toErrorMessage(error) };
+  }
+}
+
+/**
+ * Resumen de cancelación (retención/devolución) de un pedido del tenant. Solo
+ * lectura, para mostrar la confirmación antes de cancelar (S3-019). Solo acepta
+ * `pedido_id`; los montos se calculan en backend.
+ */
+export async function obtenerResumenCancelacionPedidoAction(
+  input: unknown,
+): Promise<ActionResult<ResumenCancelacionPedidoDTO>> {
+  const { pasteleriaId } = await requireAdminContext();
+
+  try {
+    const resumen = await obtenerResumenCancelacionPedidoService(
+      pasteleriaId,
+      input,
+    );
+    return { ok: true, data: resumen };
+  } catch (error) {
+    return { ok: false, error: toErrorMessage(error) };
+  }
+}
+
+/**
+ * Cancela un pedido registrando la retención y la devolución que correspondan,
+ * de forma transaccional (S3-019). Solo acepta `pedido_id`; nunca montos ni
+ * `pasteleria_id` desde el frontend.
+ */
+export async function cancelarPedidoConRetencionDevolucionAction(
+  input: unknown,
+): Promise<ActionResult<PedidoDetalleDTO>> {
+  const { pasteleriaId } = await requireAdminContext();
+
+  try {
+    const pedido = await cancelarPedidoConRetencionDevolucionService(
+      pasteleriaId,
+      input,
+    );
     revalidatePedidoPaths(pedido.cliente_id, pedido.id);
     return { ok: true, data: pedido };
   } catch (error) {

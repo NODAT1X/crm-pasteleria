@@ -3,6 +3,7 @@ import Link from "next/link";
 import { Button } from "@/components/ui/button";
 import {
   listarMovimientosFinancierosAction,
+  obtenerAnticipoConfirmacionPedidoAction,
   obtenerResumenFinancieroPedidoAction,
 } from "@/modules/pagos/actions";
 import {
@@ -16,6 +17,7 @@ import {
   getTipoEntregaLabel,
 } from "@/modules/pedidos/labels";
 
+import { AnticipoConfirmacionCard } from "../_components/anticipo-confirmacion-card";
 import { CambiarEstadoPedido } from "../_components/cambiar-estado-pedido";
 import { HistorialFinanciero } from "../_components/historial-financiero";
 import { RegistrarPagoForm } from "../_components/registrar-pago-form";
@@ -61,11 +63,13 @@ export default async function PedidoDetallePage({
   params,
 }: PedidoDetallePageProps) {
   const { id } = await params;
-  const [result, resumenResult, movimientosResult] = await Promise.all([
-    getPedidoByIdAction(id),
-    obtenerResumenFinancieroPedidoAction({ pedido_id: id }),
-    listarMovimientosFinancierosAction({ pedido_id: id }),
-  ]);
+  const [result, resumenResult, movimientosResult, anticipoResult] =
+    await Promise.all([
+      getPedidoByIdAction(id),
+      obtenerResumenFinancieroPedidoAction({ pedido_id: id }),
+      listarMovimientosFinancierosAction({ pedido_id: id }),
+      obtenerAnticipoConfirmacionPedidoAction({ pedido_id: id }),
+    ]);
 
   /**
    * Estado controlado para pedido inexistente o fuera del tenant actual.
@@ -89,6 +93,22 @@ export default async function PedidoDetallePage({
 
   const pedido = result.data;
 
+  // Estados finales: un pedido entregado o cancelado ya no se edita.
+  const esEstadoFinal =
+    pedido.estado_pedido === "cancelado" ||
+    pedido.estado_pedido === "entregado";
+
+  // En un pedido cancelado no se registran pagos.
+  // En entregado sí se permite, por S3-021.
+  const permiteRegistrarPago = pedido.estado_pedido !== "cancelado";
+
+  // El anticipo registrado forma parte de la `key` de `CambiarEstadoPedido`:
+  // cuando cambia, React remonta el componente y limpia errores locales
+  // obsoletos que de otro modo quedarían tras un refresh del Server Component.
+  const anticipoRegistradoKey = anticipoResult.ok
+    ? anticipoResult.data.anticipo_registrado
+    : 0;
+
   return (
     <section className="space-y-6">
       <div className="flex flex-col gap-4 rounded-lg border bg-background p-6 shadow-sm md:flex-row md:items-start md:justify-between">
@@ -108,13 +128,15 @@ export default async function PedidoDetallePage({
             <Link href="/pedidos">Volver al listado</Link>
           </Button>
 
-          <Button asChild variant="outline">
-            <Link href={`/pedidos/${pedido.id}/editar`}>Editar pedido</Link>
-          </Button>
+          {esEstadoFinal ? null : (
+            <Button asChild variant="outline">
+              <Link href={`/pedidos/${pedido.id}/editar`}>Editar pedido</Link>
+            </Button>
+          )}
         </div>
       </div>
 
-      <div className="grid gap-6 lg:grid-cols-[2fr_1fr_1fr]">
+      <div className="grid items-start gap-6 lg:grid-cols-[2fr_1fr_1fr]">
         <div className="rounded-lg border bg-background p-6 shadow-sm">
           <h3 className="font-medium">Cliente asociado</h3>
 
@@ -147,10 +169,18 @@ export default async function PedidoDetallePage({
           <div className="mt-4 space-y-2">
             <p className="text-sm font-medium">Cambiar estado</p>
             <CambiarEstadoPedido
+              key={`${pedido.id}-${pedido.estado_pedido}-${anticipoRegistradoKey}`}
               pedidoId={pedido.id}
               estadoActual={pedido.estado_pedido}
             />
           </div>
+
+          {anticipoResult.ok ? (
+            <AnticipoConfirmacionCard
+              anticipo={anticipoResult.data}
+              estadoActual={pedido.estado_pedido}
+            />
+          ) : null}
         </aside>
 
         <aside className="rounded-lg border bg-background p-6 shadow-sm">
@@ -188,10 +218,12 @@ export default async function PedidoDetallePage({
                 </span>
               </div>
 
-              <RegistrarPagoForm
-                pedidoId={pedido.id}
-                saldoPendiente={resumenResult.data.saldo_pendiente}
-              />
+              {permiteRegistrarPago ? (
+                <RegistrarPagoForm
+                  pedidoId={pedido.id}
+                  saldoPendiente={resumenResult.data.saldo_pendiente}
+                />
+              ) : null}
             </div>
           ) : (
             <p className="mt-4 text-sm text-muted-foreground">
