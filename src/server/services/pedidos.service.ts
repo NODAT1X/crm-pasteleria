@@ -5,7 +5,10 @@ import type { Cliente } from "@/generated/prisma/client";
 import type { MovimientoFinanciero } from "@/generated/prisma/client";
 import { EstadoPedido } from "@/generated/prisma/enums";
 import { findClienteById } from "@/server/repositories/clientes.repository";
-import { findMovimientosAplicadosByPedidoIds } from "@/server/repositories/movimientos-financieros.repository";
+import {
+  findMovimientosAplicadosByPedido,
+  findMovimientosAplicadosByPedidoIds,
+} from "@/server/repositories/movimientos-financieros.repository";
 import {
   createPedidoWithItems,
   findPedidoDetalle,
@@ -377,6 +380,25 @@ export async function updatePedidoService(
     const calculo = calcularItemsYTotal(data.items);
     items = calculo.items;
     scalarData.total = calculo.total;
+
+    // Regla S3-020: si el pedido ya tiene pagos aplicados, el nuevo total no
+    // puede quedar POR DEBAJO de lo ya pagado (dejaría el pedido sobrepagado).
+    // El nuevo total sale del cálculo backend de items; el total pagado se lee
+    // de los movimientos aplicados (tipo `pago`, estado `aplicado`) filtrados
+    // por tenant. Comparación con Decimal, nunca Float. El saldo NO se persiste:
+    // se sigue derivando desde el resumen financiero tras la edición.
+    const aplicados = await findMovimientosAplicadosByPedido({
+      pasteleriaId,
+      pedidoId: parsedId.data,
+    });
+    const totalPagadoAplicado = sumarPagosAplicados(aplicados);
+    const nuevoTotal = new Prisma.Decimal(calculo.total);
+
+    if (nuevoTotal.lessThan(totalPagadoAplicado)) {
+      throw new PedidoServiceError(
+        `No se puede guardar la edición porque el nuevo total del pedido ($${nuevoTotal.toFixed(2)}) es menor al total pagado registrado ($${totalPagadoAplicado.toFixed(2)}).`,
+      );
+    }
   }
 
   const pedido = await updatePedidoWithItems({
