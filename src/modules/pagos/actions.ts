@@ -7,12 +7,14 @@ import {
   PagoServiceError,
   anularMovimientoFinancieroService,
   listarMovimientosFinancierosService,
+  obtenerAnticipoConfirmacionPedidoService,
   obtenerResumenFinancieroPedidoService,
   registrarPagoService,
 } from "@/server/services/pagos.service";
 
 import type {
   ActionResult,
+  AnticipoConfirmacionDTO,
   MovimientoConResumenDTO,
   MovimientoFinancieroDTO,
   ResumenFinancieroPedido,
@@ -97,6 +99,26 @@ export async function obtenerResumenFinancieroPedidoAction(
       input,
     );
     return { ok: true, data: resumen };
+  } catch (error) {
+    return { ok: false, error: toErrorMessage(error) };
+  }
+}
+
+/**
+ * Anticipo mínimo para confirmar un pedido del tenant (requerido/registrado/
+ * faltante). Solo lectura para la ayuda visual del detalle (S3-018).
+ */
+export async function obtenerAnticipoConfirmacionPedidoAction(
+  input: unknown,
+): Promise<ActionResult<AnticipoConfirmacionDTO>> {
+  const { pasteleriaId } = await requireAdminContext();
+
+  try {
+    const anticipo = await obtenerAnticipoConfirmacionPedidoService(
+      pasteleriaId,
+      input,
+    );
+    return { ok: true, data: anticipo };
   } catch (error) {
     return { ok: false, error: toErrorMessage(error) };
   }

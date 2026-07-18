@@ -90,3 +90,27 @@ export type MovimientoConResumenDTO = {
   movimiento: MovimientoFinancieroDTO;
   resumen: ResumenFinancieroPedido;
 };
+
+/**
+ * Evaluación del anticipo mínimo para confirmar un pedido (S3-018). Todo se
+ * calcula en backend con Decimal desde la BD; estos `number` son solo la
+ * representación de salida (mismo criterio que el resto de DTOs financieros).
+ *
+ *  - `anticipo_requerido`: 50% del total del pedido.
+ *  - `anticipo_registrado`: total pagado aplicado (mismo cálculo que el resumen:
+ *    movimientos tipo `pago` con estado `aplicado`; no suman anulados,
+ *    devoluciones ni retenciones).
+ *  - `faltante`: cuánto falta para llegar al anticipo (0 si ya se cumple).
+ *  - `cumple`: `true` si el pedido ya puede confirmarse por anticipo.
+ *
+ * La UI usa esto solo como ayuda visual; el backend (`changeEstadoPedidoService`)
+ * es la única fuente de verdad que bloquea la confirmación.
+ */
+export type AnticipoConfirmacionDTO = {
+  pedido_id: string;
+  total_pedido: number;
+  anticipo_requerido: number;
+  anticipo_registrado: number;
+  faltante: number;
+  cumple: boolean;
+};

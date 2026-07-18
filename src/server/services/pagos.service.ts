@@ -4,7 +4,9 @@ import { Prisma } from "@/generated/prisma/client";
 import type { MovimientoFinanciero } from "@/generated/prisma/client";
 import {
   EstadoMovimientoPago,
+  EstadoPedido,
   TipoMovimientoPago,
+  TipoPago,
 } from "@/generated/prisma/enums";
 import {
   anularMovimientoFinanciero,
@@ -23,6 +25,7 @@ import {
 } from "@/validation/pagos";
 
 import type {
+  AnticipoConfirmacionDTO,
   EstadoPagoDerivado,
   MovimientoConResumenDTO,
   MovimientoFinancieroDTO,
@@ -119,6 +122,76 @@ export function sumarPagosAplicados(
 }
 
 /**
+ * Anticipo aplicado = suma (con Decimal) de los movimientos tipo `pago`,
+ * estado `aplicado` y `tipo_pago = anticipo`. Es un subconjunto de
+ * `sumarPagosAplicados`; se usa para calcular la retención por cancelación
+ * (S3-019).
+ */
+export function sumarAnticiposAplicados(
+  movimientos: MovimientoFinanciero[],
+): Prisma.Decimal {
+  return movimientos
+    .filter(
+      (movimiento) =>
+        movimiento.tipo_movimiento === TipoMovimientoPago.pago &&
+        movimiento.estado === EstadoMovimientoPago.aplicado &&
+        movimiento.tipo_pago === TipoPago.anticipo,
+    )
+    .reduce((total, movimiento) => total.plus(movimiento.monto), DECIMAL_CERO);
+}
+
+/**
+ * Fracción del anticipo aplicado que la pastelería retiene al cancelar un
+ * pedido con pagos: 25%. Decimal (nunca 0.25 Float) para un cálculo exacto.
+ */
+export const RETENCION_CANCELACION_FRACCION = new Prisma.Decimal("0.25");
+
+/**
+ * Resumen financiero de una cancelación (todo en Decimal). Función PURA
+ * reutilizada por la lectura para UI y por el flujo transaccional de
+ * cancelación (S3-019), así las reglas viven en un solo lugar:
+ *
+ *  - `totalRecibido`     = pagos aplicados (todos los tipos de pago).
+ *  - `anticipoAplicado`  = pagos aplicados con `tipo_pago = anticipo`.
+ *  - `retencion`         = anticipoAplicado * 25%, redondeado a 2 decimales.
+ *  - `devolucion`        = totalRecibido - retencion.
+ *  - `tienePagosAplicados` = totalRecibido > 0.
+ *
+ * Las devoluciones/retenciones previas no cuentan como pagos recibidos porque
+ * `sumarPagosAplicados`/`sumarAnticiposAplicados` solo suman `tipo_movimiento =
+ * pago`. Los movimientos anulados tampoco cuentan (filtro `aplicado`).
+ */
+export type ResumenCancelacion = {
+  totalRecibido: Prisma.Decimal;
+  anticipoAplicado: Prisma.Decimal;
+  retencion: Prisma.Decimal;
+  devolucion: Prisma.Decimal;
+  tienePagosAplicados: boolean;
+};
+
+export function calcularResumenCancelacion(
+  movimientosAplicados: MovimientoFinanciero[],
+): ResumenCancelacion {
+  const totalRecibido = sumarPagosAplicados(movimientosAplicados);
+  const anticipoAplicado = sumarAnticiposAplicados(movimientosAplicados);
+  // Redondeo a 2 decimales (half-up, default de decimal.js) para que la
+  // retención sea un monto válido de `Decimal(10, 2)`; la devolución se calcula
+  // sobre la retención ya redondeada para que ambos reconcilien con el total.
+  const retencion = anticipoAplicado
+    .times(RETENCION_CANCELACION_FRACCION)
+    .toDecimalPlaces(2);
+  const devolucion = totalRecibido.minus(retencion);
+
+  return {
+    totalRecibido,
+    anticipoAplicado,
+    retencion,
+    devolucion,
+    tienePagosAplicados: totalRecibido.greaterThan(0),
+  };
+}
+
+/**
  * Estado de pago derivado (S3-014):
  *  - `sin_pago`: total_pagado = 0
  *  - `pagado`:   total_pagado >= total_pedido
@@ -163,6 +236,84 @@ function buildResumen(
     saldo_pendiente: saldoPendiente.toNumber(),
     estado_pago: derivarEstadoPago(pedido.total, totalPagado),
     movimientos_count: movimientosAplicados.length,
+  };
+}
+
+// --- Anticipo mínimo para confirmar (S3-018) ---------------------------------
+
+/**
+ * Fracción del total exigida como anticipo mínimo para pasar un pedido de
+ * `cotizacion` a `confirmado`: 50%. Se define como Decimal (nunca 0.5 Float)
+ * para que el cálculo `total * 0.50` sea exacto.
+ */
+export const ANTICIPO_MINIMO_FRACCION = new Prisma.Decimal("0.5");
+
+/**
+ * Evaluación del anticipo mínimo (todo en Decimal). Función PURA: la reutilizan
+ * tanto la lectura para UI (`obtenerAnticipoConfirmacionPedidoService`) como la
+ * regla de confirmación en `pedidos.service.ts`, así el 50% vive en un solo
+ * lugar.
+ */
+export type AnticipoConfirmacion = {
+  totalPedido: Prisma.Decimal;
+  anticipoRequerido: Prisma.Decimal;
+  anticipoRegistrado: Prisma.Decimal;
+  faltante: Prisma.Decimal;
+  cumple: boolean;
+};
+
+/**
+ * Calcula el anticipo requerido (50% del total), el registrado (total pagado
+ * aplicado) y el faltante. `anticipo_registrado` usa exactamente la misma regla
+ * que el resumen (`sumarPagosAplicados`): solo movimientos tipo `pago` y estado
+ * `aplicado`.
+ */
+export function evaluarAnticipoConfirmacion(
+  totalPedido: Prisma.Decimal,
+  movimientosAplicados: MovimientoFinanciero[],
+): AnticipoConfirmacion {
+  const anticipoRegistrado = sumarPagosAplicados(movimientosAplicados);
+  const anticipoRequerido = totalPedido.times(ANTICIPO_MINIMO_FRACCION);
+  const cumple = anticipoRegistrado.greaterThanOrEqualTo(anticipoRequerido);
+  const faltanteBruto = anticipoRequerido.minus(anticipoRegistrado);
+  const faltante = faltanteBruto.isNegative() ? DECIMAL_CERO : faltanteBruto;
+
+  return {
+    totalPedido,
+    anticipoRequerido,
+    anticipoRegistrado,
+    faltante,
+    cumple,
+  };
+}
+
+/**
+ * Mensaje de negocio (en español) cuando el anticipo no alcanza para confirmar.
+ * Vive junto a la regla para que enforcement y texto no se separen.
+ */
+export function mensajeAnticipoInsuficiente(
+  anticipo: AnticipoConfirmacion,
+): string {
+  return (
+    "Para confirmar este pedido se requiere un anticipo mínimo del 50%. " +
+    `Requerido: $${anticipo.anticipoRequerido.toFixed(2)}. ` +
+    `Registrado: $${anticipo.anticipoRegistrado.toFixed(2)}. ` +
+    `Faltante: $${anticipo.faltante.toFixed(2)}.`
+  );
+}
+
+function toAnticipoConfirmacionDTO(
+  pedidoId: string,
+  anticipo: AnticipoConfirmacion,
+): AnticipoConfirmacionDTO {
+  return {
+    pedido_id: pedidoId,
+    // `Decimal` -> `number` solo como representación de salida (ver types.ts).
+    total_pedido: anticipo.totalPedido.toNumber(),
+    anticipo_requerido: anticipo.anticipoRequerido.toNumber(),
+    anticipo_registrado: anticipo.anticipoRegistrado.toNumber(),
+    faltante: anticipo.faltante.toNumber(),
+    cumple: anticipo.cumple,
   };
 }
 
@@ -250,6 +401,15 @@ export async function registrarPagoService(
           pedidoId: data.pedido_id,
           db: tx,
         });
+
+        // Regla S3-019: un pedido cancelado no admite nuevos pagos (evitaría
+        // movimientos posteriores a la cancelación). `entregado` NO se bloquea
+        // aquí para no interferir con S3-021 (entrega con saldo pendiente).
+        if (pedido.estado_pedido === EstadoPedido.cancelado) {
+          throw new PagoServiceError(
+            "No se pueden registrar pagos en un pedido cancelado.",
+          );
+        }
 
         const aplicados = await findMovimientosAplicadosByPedido({
           pasteleriaId,
@@ -355,6 +515,37 @@ export async function obtenerResumenFinancieroPedidoService(
   });
 
   return buildResumen(pedido, aplicados);
+}
+
+/**
+ * Evaluación del anticipo mínimo para confirmar un pedido del tenant (S3-018),
+ * calculada SIEMPRE desde la BD (total del pedido + movimientos aplicados).
+ * Pensada como ayuda visual del detalle; la confirmación la sigue bloqueando
+ * `changeEstadoPedidoService`.
+ */
+export async function obtenerAnticipoConfirmacionPedidoService(
+  pasteleriaId: string,
+  input: unknown,
+): Promise<AnticipoConfirmacionDTO> {
+  const parsed = pedidoFinancieroQuerySchema.safeParse(input);
+  if (!parsed.success) {
+    throw new PagoServiceError(formatZodError(parsed.error));
+  }
+
+  const pedido = await assertPedidoDelTenant({
+    pasteleriaId,
+    pedidoId: parsed.data.pedido_id,
+  });
+
+  const aplicados = await findMovimientosAplicadosByPedido({
+    pasteleriaId,
+    pedidoId: parsed.data.pedido_id,
+  });
+
+  return toAnticipoConfirmacionDTO(
+    pedido.id,
+    evaluarAnticipoConfirmacion(pedido.total, aplicados),
+  );
 }
 
 /**
