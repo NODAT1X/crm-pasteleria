@@ -89,6 +89,13 @@ export default async function PedidoDetallePage({
 
   const pedido = result.data;
 
+  // Estados finales: un pedido entregado o cancelado ya no se edita (S3-019).
+  const esEstadoFinal =
+    pedido.estado_pedido === "cancelado" ||
+    pedido.estado_pedido === "entregado";
+  // En un pedido cancelado no se registran pagos (sí en `entregado`, por S3-021).
+  const permiteRegistrarPago = pedido.estado_pedido !== "cancelado";
+
   return (
     <section className="space-y-6">
       <div className="flex flex-col gap-4 rounded-lg border bg-background p-6 shadow-sm md:flex-row md:items-start md:justify-between">
@@ -108,9 +115,11 @@ export default async function PedidoDetallePage({
             <Link href="/pedidos">Volver al listado</Link>
           </Button>
 
-          <Button asChild variant="outline">
-            <Link href={`/pedidos/${pedido.id}/editar`}>Editar pedido</Link>
-          </Button>
+          {esEstadoFinal ? null : (
+            <Button asChild variant="outline">
+              <Link href={`/pedidos/${pedido.id}/editar`}>Editar pedido</Link>
+            </Button>
+          )}
         </div>
       </div>
 
@@ -188,10 +197,12 @@ export default async function PedidoDetallePage({
                 </span>
               </div>
 
-              <RegistrarPagoForm
-                pedidoId={pedido.id}
-                saldoPendiente={resumenResult.data.saldo_pendiente}
-              />
+              {permiteRegistrarPago ? (
+                <RegistrarPagoForm
+                  pedidoId={pedido.id}
+                  saldoPendiente={resumenResult.data.saldo_pendiente}
+                />
+              ) : null}
             </div>
           ) : (
             <p className="mt-4 text-sm text-muted-foreground">

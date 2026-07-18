@@ -83,3 +83,29 @@ export type PedidoDetalleDTO = PedidoBaseDTO & {
   cliente: Cliente;
   items: PedidoItemDTO[];
 };
+
+/**
+ * Resumen de la cancelación de un pedido (S3-019), SIEMPRE calculado en backend
+ * desde los movimientos aplicados (nunca desde el frontend). Los montos salen
+ * como `number` (representación de salida); los cálculos internos son Decimal.
+ *
+ *  - `tiene_pagos_aplicados`: hay pagos aplicados que obligan a registrar
+ *    retención/devolución al cancelar.
+ *  - `total_recibido`:  suma de pagos aplicados (todos los tipos).
+ *  - `anticipo_aplicado`: pagos aplicados con `tipo_pago = anticipo`.
+ *  - `retencion`:       25% del anticipo aplicado.
+ *  - `devolucion`:      total_recibido - retención.
+ *  - `puede_cancelar`:  si la transición a `cancelado` es válida desde el estado
+ *    actual del pedido.
+ *  - `mensaje`:         texto en español para la confirmación en UI.
+ */
+export type ResumenCancelacionPedidoDTO = {
+  pedido_id: string;
+  tiene_pagos_aplicados: boolean;
+  total_recibido: number;
+  anticipo_aplicado: number;
+  retencion: number;
+  devolucion: number;
+  puede_cancelar: boolean;
+  mensaje: string;
+};
