@@ -29,6 +29,7 @@ import {
   derivarEstadoPago,
   evaluarAnticipoConfirmacion,
   mensajeAnticipoInsuficiente,
+  mensajeErrorDeInfraestructura,
   sumarPagosAplicados,
   type ResumenCancelacion,
 } from "@/server/services/pagos.service";
@@ -83,6 +84,31 @@ export class PedidoServiceError extends Error {
 // español en el schema, así que basta para la UI).
 function formatZodError(error: z.ZodError): string {
   return error.issues.map((issue) => issue.message).join(" ");
+}
+
+/**
+ * Envuelve un flujo transaccional de pedidos: convierte los fallos de
+ * INFRAESTRUCTURA de Prisma (pool saturado, transacción que no pudo abrirse,
+ * conflicto de serialización, BD inalcanzable) en `PedidoServiceError` con un
+ * mensaje funcional, y deja pasar cualquier otro error para que la action lo
+ * registre como inesperado.
+ *
+ * La traducción vive en `pagos.service` para que ambos módulos compartan los
+ * mismos textos. En todos esos casos la transacción se revirtió, así que el
+ * pedido conserva su estado anterior y no queda ningún movimiento a medias.
+ */
+async function conErroresDeInfraestructuraControlados<T>(
+  fn: () => Promise<T>,
+): Promise<T> {
+  try {
+    return await fn();
+  } catch (error) {
+    const mensaje = mensajeErrorDeInfraestructura(error);
+    if (mensaje) {
+      throw new PedidoServiceError(mensaje);
+    }
+    throw error;
+  }
 }
 
 // --- Dinero (aritmética en centavos, sin Float como fuente de verdad) --------
@@ -442,84 +468,96 @@ export async function changeEstadoPedidoService(
 
   const { pedido_id, estado_pedido } = parsed.data;
 
-  // Estado actual desde la BD (filtrado por tenant).
-  const actual = await findPedidoEstado({ pasteleriaId, id: pedido_id });
-  if (!actual) {
-    throw new PedidoServiceError(
-      "El pedido no existe o no pertenece a tu pastelería.",
-    );
-  }
+  // TRANSACCIONAL (S4-002): leer estado/total -> validar transición -> validar
+  // el anticipo mínimo -> escribir el nuevo estado ocurre de forma atómica y con
+  // aislamiento `Serializable`. Antes estas lecturas y la escritura corrían
+  // sueltas, así que una anulación de movimiento colada entre la validación del
+  // 50% y el update podía dejar el pedido `confirmado` con anticipo insuficiente.
+  // Si cualquier validación falla, la transacción se revierte y el estado NO
+  // cambia.
+  return conErroresDeInfraestructuraControlados(() =>
+    runMovimientosFinancierosTransaction(
+      async (tx) => {
+        // Una sola lectura del pedido: `findPedidoFinanciero` ya trae
+        // `estado_pedido` y `total`, así la transacción no hace viajes de más.
+        const actual = await findPedidoFinanciero({
+          pasteleriaId,
+          pedidoId: pedido_id,
+          db: tx,
+        });
+        if (!actual) {
+          throw new PedidoServiceError(
+            "El pedido no existe o no pertenece a tu pastelería.",
+          );
+        }
 
-  // Transición validada con la función centralizada de S2-003 (rechaza estados
-  // finales y self-transition).
-  const transicion = validateEstadoPedidoTransition(
-    actual.estado_pedido,
-    estado_pedido,
+        // Transición validada con la función centralizada de S2-003 (rechaza
+        // estados finales y self-transition).
+        const transicion = validateEstadoPedidoTransition(
+          actual.estado_pedido,
+          estado_pedido,
+        );
+        if (!transicion.ok) {
+          throw new PedidoServiceError(transicion.error);
+        }
+
+        // Regla S3-018: pasar de `cotizacion` a `confirmado` exige un anticipo
+        // mínimo del 50% del total. El total y los movimientos se leen SIEMPRE
+        // de la BD dentro de la transacción; nada llega del frontend.
+        if (
+          actual.estado_pedido === EstadoPedido.cotizacion &&
+          estado_pedido === EstadoPedido.confirmado
+        ) {
+          const movimientosAplicados = await findMovimientosAplicadosByPedido({
+            pasteleriaId,
+            pedidoId: pedido_id,
+            db: tx,
+          });
+
+          const anticipo = evaluarAnticipoConfirmacion(
+            actual.total,
+            movimientosAplicados,
+          );
+
+          if (!anticipo.cumple) {
+            throw new PedidoServiceError(mensajeAnticipoInsuficiente(anticipo));
+          }
+        }
+
+        // Anti-bypass S3-019: un pedido con pagos aplicados NO puede cancelarse
+        // por este flujo genérico. Debe usarse el flujo de retención/devolución.
+        if (estado_pedido === EstadoPedido.cancelado) {
+          const aplicados = await findMovimientosAplicadosByPedido({
+            pasteleriaId,
+            pedidoId: pedido_id,
+            db: tx,
+          });
+
+          if (calcularResumenCancelacion(aplicados).tienePagosAplicados) {
+            throw new PedidoServiceError(
+              "Este pedido tiene pagos registrados. Cancélalo desde el flujo de cancelación con retención y devolución para registrar los movimientos financieros.",
+            );
+          }
+        }
+
+        const pedido = await updateEstadoPedido({
+          pasteleriaId,
+          id: pedido_id,
+          estado: estado_pedido,
+          db: tx,
+        });
+
+        if (!pedido) {
+          throw new PedidoServiceError(
+            "El pedido no existe o no pertenece a tu pastelería.",
+          );
+        }
+
+        return toDetalleDTO(pedido);
+      },
+      { isolationLevel: Prisma.TransactionIsolationLevel.Serializable },
+    ),
   );
-  if (!transicion.ok) {
-    throw new PedidoServiceError(transicion.error);
-  }
-
-  // Regla S3-018: pasar de `cotizacion` a `confirmado` exige un anticipo mínimo
-  // del 50% del total.
-  if (
-    actual.estado_pedido === EstadoPedido.cotizacion &&
-    estado_pedido === EstadoPedido.confirmado
-  ) {
-    const pedidoFinanciero = await findPedidoFinanciero({
-      pasteleriaId,
-      pedidoId: pedido_id,
-    });
-
-    if (!pedidoFinanciero) {
-      throw new PedidoServiceError(
-        "El pedido no existe o no pertenece a tu pastelería.",
-      );
-    }
-
-    const movimientosAplicados = await findMovimientosAplicadosByPedido({
-      pasteleriaId,
-      pedidoId: pedido_id,
-    });
-
-    const anticipo = evaluarAnticipoConfirmacion(
-      pedidoFinanciero.total,
-      movimientosAplicados,
-    );
-
-    if (!anticipo.cumple) {
-      throw new PedidoServiceError(mensajeAnticipoInsuficiente(anticipo));
-    }
-  }
-
-  // Anti-bypass S3-019: un pedido con pagos aplicados NO puede cancelarse por
-  // este flujo genérico. Debe usarse el flujo de retención/devolución.
-  if (estado_pedido === EstadoPedido.cancelado) {
-    const aplicados = await findMovimientosAplicadosByPedido({
-      pasteleriaId,
-      pedidoId: pedido_id,
-    });
-
-    if (calcularResumenCancelacion(aplicados).tienePagosAplicados) {
-      throw new PedidoServiceError(
-        "Este pedido tiene pagos registrados. Cancélalo desde el flujo de cancelación con retención y devolución para registrar los movimientos financieros.",
-      );
-    }
-  }
-
-  const pedido = await updateEstadoPedido({
-    pasteleriaId,
-    id: pedido_id,
-    estado: estado_pedido,
-  });
-
-  if (!pedido) {
-    throw new PedidoServiceError(
-      "El pedido no existe o no pertenece a tu pastelería.",
-    );
-  }
-
-  return toDetalleDTO(pedido);
 }
 
 // --- Cancelación con retención / devolución (S3-019) ------------------------
@@ -629,84 +667,87 @@ export async function cancelarPedidoConRetencionDevolucionService(
   }
   const { pedido_id } = parsed.data;
 
-  return runMovimientosFinancierosTransaction(
-    async (tx) => {
-      const actual = await findPedidoEstado({
-        pasteleriaId,
-        id: pedido_id,
-        db: tx,
-      });
-      if (!actual) {
-        throw new PedidoServiceError(
-          "El pedido no existe o no pertenece a tu pastelería.",
-        );
-      }
-
-      const transicion = validateEstadoPedidoTransition(
-        actual.estado_pedido,
-        EstadoPedido.cancelado,
-      );
-      if (!transicion.ok) {
-        throw new PedidoServiceError(transicion.error);
-      }
-
-      const aplicados = await findMovimientosAplicadosByPedido({
-        pasteleriaId,
-        pedidoId: pedido_id,
-        db: tx,
-      });
-      const resumen = calcularResumenCancelacion(aplicados);
-
-      // Retención: solo si es > 0 (no se crean movimientos de monto 0).
-      if (resumen.retencion.greaterThan(0)) {
-        await createMovimientoFinanciero({
+  return conErroresDeInfraestructuraControlados(() =>
+    runMovimientosFinancierosTransaction(
+      async (tx) => {
+        const actual = await findPedidoEstado({
           pasteleriaId,
-          data: {
-            pedido_id,
-            // El caso de uso fija el tipo; nunca viene de la UI.
-            tipo_movimiento: TipoMovimientoPago.retencion,
-            metodo_pago: null,
-            tipo_pago: null,
-            monto: resumen.retencion.toFixed(2),
-            referencia: null,
-            notas: "Retención del 25% del anticipo por cancelación del pedido.",
-          },
+          id: pedido_id,
           db: tx,
         });
-      }
+        if (!actual) {
+          throw new PedidoServiceError(
+            "El pedido no existe o no pertenece a tu pastelería.",
+          );
+        }
 
-      // Devolución: solo si es > 0.
-      if (resumen.devolucion.greaterThan(0)) {
-        await createMovimientoFinanciero({
+        const transicion = validateEstadoPedidoTransition(
+          actual.estado_pedido,
+          EstadoPedido.cancelado,
+        );
+        if (!transicion.ok) {
+          throw new PedidoServiceError(transicion.error);
+        }
+
+        const aplicados = await findMovimientosAplicadosByPedido({
           pasteleriaId,
-          data: {
-            pedido_id,
-            tipo_movimiento: TipoMovimientoPago.devolucion,
-            metodo_pago: null,
-            tipo_pago: null,
-            monto: resumen.devolucion.toFixed(2),
-            referencia: null,
-            notas:
-              "Devolución al cliente por cancelación del pedido (total recibido menos retención).",
-          },
+          pedidoId: pedido_id,
           db: tx,
         });
-      }
+        const resumen = calcularResumenCancelacion(aplicados);
 
-      const pedido = await updateEstadoPedido({
-        pasteleriaId,
-        id: pedido_id,
-        estado: EstadoPedido.cancelado,
-        db: tx,
-      });
-      if (!pedido) {
-        throw new PedidoServiceError(
-          "El pedido no existe o no pertenece a tu pastelería.",
-        );
-      }
+        // Retención: solo si es > 0 (no se crean movimientos de monto 0).
+        if (resumen.retencion.greaterThan(0)) {
+          await createMovimientoFinanciero({
+            pasteleriaId,
+            data: {
+              pedido_id,
+              // El caso de uso fija el tipo; nunca viene de la UI.
+              tipo_movimiento: TipoMovimientoPago.retencion,
+              metodo_pago: null,
+              tipo_pago: null,
+              monto: resumen.retencion.toFixed(2),
+              referencia: null,
+              notas:
+                "Retención del 25% del anticipo por cancelación del pedido.",
+            },
+            db: tx,
+          });
+        }
 
-      return toDetalleDTO(pedido);
-    },
-    { isolationLevel: Prisma.TransactionIsolationLevel.Serializable },
+        // Devolución: solo si es > 0.
+        if (resumen.devolucion.greaterThan(0)) {
+          await createMovimientoFinanciero({
+            pasteleriaId,
+            data: {
+              pedido_id,
+              tipo_movimiento: TipoMovimientoPago.devolucion,
+              metodo_pago: null,
+              tipo_pago: null,
+              monto: resumen.devolucion.toFixed(2),
+              referencia: null,
+              notas:
+                "Devolución al cliente por cancelación del pedido (total recibido menos retención).",
+            },
+            db: tx,
+          });
+        }
+
+        const pedido = await updateEstadoPedido({
+          pasteleriaId,
+          id: pedido_id,
+          estado: EstadoPedido.cancelado,
+          db: tx,
+        });
+        if (!pedido) {
+          throw new PedidoServiceError(
+            "El pedido no existe o no pertenece a tu pastelería.",
+          );
+        }
+
+        return toDetalleDTO(pedido);
+      },
+      { isolationLevel: Prisma.TransactionIsolationLevel.Serializable },
+    ),
   );
 }
