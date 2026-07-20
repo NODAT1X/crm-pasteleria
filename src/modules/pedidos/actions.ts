@@ -3,6 +3,7 @@
 import { revalidatePath } from "next/cache";
 
 import { requireAdminContext } from "@/server/auth/authorization";
+import { mensajeErrorDeInfraestructura } from "@/server/services/pagos.service";
 import {
   PedidoServiceError,
   cancelarPedidoConRetencionDevolucionService,
@@ -37,6 +38,15 @@ const DASHBOARD_PATH = "/dashboard";
 function toErrorMessage(error: unknown): string {
   if (error instanceof PedidoServiceError) {
     return error.message;
+  }
+
+  // Red de seguridad para errores de infraestructura que no hayan sido
+  // convertidos por el service: un fallo de pool/conexión de Prisma (P2028,
+  // P2024, P1001...) se traduce aquí a un mensaje funcional en vez de caer en
+  // el genérico "error inesperado" (S4-002).
+  const mensajeInfraestructura = mensajeErrorDeInfraestructura(error);
+  if (mensajeInfraestructura) {
+    return mensajeInfraestructura;
   }
 
   console.error("[pedidos] Error inesperado:", error);

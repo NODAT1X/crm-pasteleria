@@ -32,15 +32,41 @@ import { prisma } from "@/server/db/prisma";
 // --- Transacciones ------------------------------------------------------------
 
 /**
+ * Presupuestos de la transacción interactiva.
+ *
+ * Los defaults de Prisma (`maxWait` 2 s para OBTENER la conexión y `timeout`
+ * 5 s para el cuerpo) asumen una BD local. Contra el pooler remoto de Supabase
+ * cada viaje cuesta ~200 ms y el pool se comparte con el render del detalle de
+ * pedido, así que abrir la transacción puede tardar más de 2 s; cuando eso pasa
+ * Prisma aborta con `P2028` ("Unable to start a transaction in the given time")
+ * ANTES de ejecutar ninguna regla de negocio, y el usuario recibe un error
+ * técnico en lugar de una validación (bug S4-002 / BUG-S3-022-001).
+ *
+ * Los valores se amplían a la latencia real del entorno. El cuerpo sigue siendo
+ * corto (2 lecturas + 1 escritura), así que el `timeout` es un tope de
+ * seguridad, no el caso normal.
+ */
+const TRANSACTION_MAX_WAIT_MS = 10_000;
+const TRANSACTION_TIMEOUT_MS = 15_000;
+
+/**
  * Ejecuta `fn` dentro de `prisma.$transaction`. Permite fijar el nivel de
  * aislamiento (p. ej. `Serializable` para registrar pagos: dos pagos
  * concurrentes al mismo pedido no pueden leer ambos el saldo viejo y sobrepagar).
  */
 export function runMovimientosFinancierosTransaction<T>(
   fn: (tx: Prisma.TransactionClient) => Promise<T>,
-  options?: { isolationLevel?: Prisma.TransactionIsolationLevel },
+  options?: {
+    isolationLevel?: Prisma.TransactionIsolationLevel;
+    maxWait?: number;
+    timeout?: number;
+  },
 ): Promise<T> {
-  return prisma.$transaction(fn, options);
+  return prisma.$transaction(fn, {
+    maxWait: TRANSACTION_MAX_WAIT_MS,
+    timeout: TRANSACTION_TIMEOUT_MS,
+    ...options,
+  });
 }
 
 // --- Tipos de datos de entrada (dinero ya calculado como string 2 decimales) -

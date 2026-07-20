@@ -358,13 +358,139 @@ async function assertPedidoDelTenant(params: {
   return pedido;
 }
 
-// Conflicto de serialización (dos transacciones Serializable simultáneas sobre
-// el mismo pedido): Prisma lo reporta como P2034.
-function isConflictoDeConcurrencia(error: unknown): boolean {
-  return (
-    error instanceof Prisma.PrismaClientKnownRequestError &&
-    error.code === "P2034"
-  );
+// --- Traducción de fallos de infraestructura ---------------------------------
+
+const MENSAJE_SISTEMA_OCUPADO =
+  "El sistema está ocupado procesando otras operaciones y no se pudo completar la solicitud. No se guardó ningún cambio; inténtalo de nuevo en unos segundos.";
+
+const MENSAJE_SIN_CONEXION =
+  "No se pudo conectar con la base de datos. No se guardó ningún cambio; inténtalo de nuevo en unos segundos.";
+
+/**
+ * SQLSTATE de PostgreSQL que significan "no hay conexión disponible" o "la
+ * conexión se cayó", nunca "el dato es inválido". Llegan envueltos en un
+ * `DriverAdapterError` del adaptador `pg`, que no es un error de Prisma y por
+ * tanto no trae `code` propio.
+ *
+ * `XX000` es genérico, pero el pooler de Supabase lo usa para `EMAXCONNSESSION`
+ * ("max clients reached in session mode"), así que se exige además ese texto
+ * para no capturar cualquier error interno del servidor.
+ */
+const SQLSTATE_SIN_CONEXION = new Set([
+  "53300", // too_many_connections
+  "53400", // configuration_limit_exceeded
+  "08000", // connection_exception
+  "08001", // sqlclient_unable_to_establish_sqlconnection
+  "08004", // sqlserver_rejected_establishment_of_sqlconnection
+  "08006", // connection_failure
+  "57P01", // admin_shutdown
+  "57P03", // cannot_connect_now
+]);
+
+/**
+ * Mensajes que `pg-pool` lanza como `Error` PLANO (sin código) cuando se agota
+ * `connectionTimeoutMillis` esperando una conexión libre, o cuando la conexión
+ * se corta por timeout. No son errores de Prisma ni del driver de Postgres, así
+ * que solo se pueden reconocer por su texto (constantes de `pg-pool`).
+ */
+const MENSAJES_TIMEOUT_DEL_POOL = [
+  "timeout exceeded when trying to connect",
+  "Connection terminated due to connection timeout",
+];
+
+// `true` si el error viene del adaptador de driver o del pool por falta de
+// conexiones disponibles (nunca por un dato inválido).
+function esSaturacionDelDriver(error: unknown): boolean {
+  if (!(error instanceof Error)) {
+    return false;
+  }
+
+  if (MENSAJES_TIMEOUT_DEL_POOL.some((texto) => error.message === texto)) {
+    return true;
+  }
+
+  if (error.name !== "DriverAdapterError") {
+    return false;
+  }
+
+  const cause = error.cause as { code?: string; message?: string } | undefined;
+  const code = cause?.code;
+  if (!code) {
+    return false;
+  }
+
+  if (code === "XX000") {
+    return (cause?.message ?? "").includes("EMAXCONNSESSION");
+  }
+  return SQLSTATE_SIN_CONEXION.has(code);
+}
+
+/**
+ * Traduce fallos de INFRAESTRUCTURA de Prisma (no de negocio) a un mensaje
+ * funcional en español, o devuelve `null` si el error no es de infraestructura
+ * (para que el llamador lo siga tratando como inesperado y lo registre).
+ *
+ * Ninguno de estos códigos significa que la operación fuera inválida: significan
+ * que no se pudo llegar a ejecutar, o que se abortó. En todos los casos la
+ * transacción NO se confirmó, así que no queda ningún movimiento financiero ni
+ * cambio de estado a medias; por eso el mensaje afirma que no se guardó nada e
+ * invita a reintentar.
+ *
+ * Exportada para que `pedidos.service.ts` y la capa de actions reutilicen la
+ * misma traducción sin duplicar los textos.
+ */
+export function mensajeErrorDeInfraestructura(error: unknown): string | null {
+  if (esSaturacionDelDriver(error)) {
+    return MENSAJE_SISTEMA_OCUPADO;
+  }
+
+  let code: string | undefined;
+
+  if (error instanceof Prisma.PrismaClientKnownRequestError) {
+    code = error.code;
+  } else if (error instanceof Prisma.PrismaClientInitializationError) {
+    code = error.errorCode;
+  }
+
+  switch (code) {
+    // P2034: conflicto de serialización entre dos transacciones Serializable
+    // simultáneas sobre el mismo pedido. La perdedora se aborta entera.
+    case "P2034":
+      return "Otra operación sobre este pedido se estaba procesando al mismo tiempo. No se guardó ningún cambio; inténtalo de nuevo.";
+    // P2028: no se pudo abrir/sostener la transacción interactiva (pool saturado
+    // o BD lenta). P2024: se agotó la espera por una conexión libre del pool.
+    case "P2028":
+    case "P2024":
+      return MENSAJE_SISTEMA_OCUPADO;
+    // Conectividad con la base de datos (servidor inalcanzable, credenciales,
+    // timeout de arranque).
+    case "P1001":
+    case "P1002":
+    case "P1008":
+    case "P1017":
+      return MENSAJE_SIN_CONEXION;
+    default:
+      return null;
+  }
+}
+
+/**
+ * Envuelve un flujo transaccional de pagos: convierte los fallos de
+ * infraestructura en `PagoServiceError` (mensaje funcional) y deja pasar
+ * cualquier otro error para que la action lo registre como inesperado.
+ */
+async function conErroresDeInfraestructuraControlados<T>(
+  fn: () => Promise<T>,
+): Promise<T> {
+  try {
+    return await fn();
+  } catch (error) {
+    const mensaje = mensajeErrorDeInfraestructura(error);
+    if (mensaje) {
+      throw new PagoServiceError(mensaje);
+    }
+    throw error;
+  }
 }
 
 // --- Casos de uso -----------------------------------------------------------
@@ -393,8 +519,8 @@ export async function registrarPagoService(
   const montoString = montoToDecimalString(data.monto);
   const montoDecimal = new Prisma.Decimal(montoString);
 
-  try {
-    return await runMovimientosFinancierosTransaction(
+  return conErroresDeInfraestructuraControlados(() =>
+    runMovimientosFinancierosTransaction(
       async (tx) => {
         const pedido = await assertPedidoDelTenant({
           pasteleriaId,
@@ -452,15 +578,8 @@ export async function registrarPagoService(
         return { movimiento: toMovimientoDTO(movimiento), resumen };
       },
       { isolationLevel: Prisma.TransactionIsolationLevel.Serializable },
-    );
-  } catch (error) {
-    if (isConflictoDeConcurrencia(error)) {
-      throw new PagoServiceError(
-        "Otro movimiento de este pedido se estaba registrando al mismo tiempo. Inténtalo de nuevo.",
-      );
-    }
-    throw error;
-  }
+    ),
+  );
 }
 
 /**
@@ -566,56 +685,58 @@ export async function anularMovimientoFinancieroService(
   }
   const { movimiento_id, motivo } = parsed.data;
 
-  return runMovimientosFinancierosTransaction(async (tx) => {
-    const movimiento = await findMovimientoById({
-      pasteleriaId,
-      id: movimiento_id,
-      db: tx,
-    });
+  return conErroresDeInfraestructuraControlados(() =>
+    runMovimientosFinancierosTransaction(async (tx) => {
+      const movimiento = await findMovimientoById({
+        pasteleriaId,
+        id: movimiento_id,
+        db: tx,
+      });
 
-    if (!movimiento) {
-      throw new PagoServiceError(
-        "El movimiento no existe o no pertenece a tu pastelería.",
-      );
-    }
-    if (movimiento.estado === EstadoMovimientoPago.anulado) {
-      throw new PagoServiceError("El movimiento ya está anulado.");
-    }
+      if (!movimiento) {
+        throw new PagoServiceError(
+          "El movimiento no existe o no pertenece a tu pastelería.",
+        );
+      }
+      if (movimiento.estado === EstadoMovimientoPago.anulado) {
+        throw new PagoServiceError("El movimiento ya está anulado.");
+      }
 
-    // Anexar el motivo de forma clara sin perder la nota anterior.
-    const notaAnulacion = `[Anulación] ${motivo}`;
-    const notas = movimiento.notas
-      ? `${movimiento.notas}\n${notaAnulacion}`
-      : notaAnulacion;
+      // Anexar el motivo de forma clara sin perder la nota anterior.
+      const notaAnulacion = `[Anulación] ${motivo}`;
+      const notas = movimiento.notas
+        ? `${movimiento.notas}\n${notaAnulacion}`
+        : notaAnulacion;
 
-    const anulado = await anularMovimientoFinanciero({
-      pasteleriaId,
-      id: movimiento.id,
-      notas,
-      db: tx,
-    });
+      const anulado = await anularMovimientoFinanciero({
+        pasteleriaId,
+        id: movimiento.id,
+        notas,
+        db: tx,
+      });
 
-    // El update condicionado (estado = aplicado) no afectó filas: otro proceso
-    // lo anuló entre la lectura y el update.
-    if (!anulado) {
-      throw new PagoServiceError("El movimiento ya está anulado.");
-    }
+      // El update condicionado (estado = aplicado) no afectó filas: otro proceso
+      // lo anuló entre la lectura y el update.
+      if (!anulado) {
+        throw new PagoServiceError("El movimiento ya está anulado.");
+      }
 
-    // Recalcular el resumen del pedido dentro de la misma transacción.
-    const pedido = await assertPedidoDelTenant({
-      pasteleriaId,
-      pedidoId: movimiento.pedido_id,
-      db: tx,
-    });
-    const aplicados = await findMovimientosAplicadosByPedido({
-      pasteleriaId,
-      pedidoId: movimiento.pedido_id,
-      db: tx,
-    });
+      // Recalcular el resumen del pedido dentro de la misma transacción.
+      const pedido = await assertPedidoDelTenant({
+        pasteleriaId,
+        pedidoId: movimiento.pedido_id,
+        db: tx,
+      });
+      const aplicados = await findMovimientosAplicadosByPedido({
+        pasteleriaId,
+        pedidoId: movimiento.pedido_id,
+        db: tx,
+      });
 
-    return {
-      movimiento: toMovimientoDTO(anulado),
-      resumen: buildResumen(pedido, aplicados),
-    };
-  });
+      return {
+        movimiento: toMovimientoDTO(anulado),
+        resumen: buildResumen(pedido, aplicados),
+      };
+    }),
+  );
 }

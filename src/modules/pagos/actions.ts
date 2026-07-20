@@ -7,6 +7,7 @@ import {
   PagoServiceError,
   anularMovimientoFinancieroService,
   listarMovimientosFinancierosService,
+  mensajeErrorDeInfraestructura,
   obtenerAnticipoConfirmacionPedidoService,
   obtenerResumenFinancieroPedidoService,
   registrarPagoService,
@@ -38,6 +39,15 @@ const DASHBOARD_PATH = "/dashboard";
 function toErrorMessage(error: unknown): string {
   if (error instanceof PagoServiceError) {
     return error.message;
+  }
+
+  // Red de seguridad para errores de infraestructura que no hayan sido
+  // convertidos por el service: un fallo de pool/conexión de Prisma (P2028,
+  // P2024, P1001...) se traduce aquí a un mensaje funcional en vez de caer en
+  // el genérico "error inesperado" (S4-002).
+  const mensajeInfraestructura = mensajeErrorDeInfraestructura(error);
+  if (mensajeInfraestructura) {
+    return mensajeInfraestructura;
   }
 
   // Nunca se expone el stack ni el error crudo al usuario final.
