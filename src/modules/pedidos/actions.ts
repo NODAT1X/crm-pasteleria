@@ -1,6 +1,7 @@
 "use server";
 
 import { revalidatePath } from "next/cache";
+import { unstable_rethrow } from "next/navigation";
 
 import { requireAdminContext } from "@/server/auth/authorization";
 import { mensajeErrorDeInfraestructura } from "@/server/services/pagos.service";
@@ -53,6 +54,43 @@ function toErrorMessage(error: unknown): string {
   return "Ocurrió un error inesperado. Inténtalo de nuevo.";
 }
 
+/**
+ * Resuelve el contexto admin traduciendo un fallo de INFRAESTRUCTURA a
+ * `ActionResult`, en vez de dejar que la excepción escape hasta el Server
+ * Component (S4-003).
+ *
+ * `requireAdminContext()` consulta la BD dos veces (sesión de Better Auth +
+ * usuario del tenant), así que es tan sensible a una caída de pool/conexión
+ * como el propio service. Hasta ahora se llamaba FUERA del try/catch —a
+ * propósito, para no atrapar el `redirect()` de Next, que funciona lanzando— y
+ * por eso `toErrorMessage` nunca llegaba a ver estos errores: el listado moría
+ * con el error crudo de Prisma en pantalla (BUG-S3-022-002).
+ *
+ * `unstable_rethrow` re-lanza primero las señales internas de Next (redirect,
+ * notFound, bailouts de renderizado dinámico), así el flujo de autenticación
+ * queda intacto. Un error que NO sea de infraestructura también se re-lanza:
+ * es un fallo real y debe llegar al error boundary en vez de disfrazarse de
+ * "inténtalo de nuevo".
+ */
+async function resolverContextoAdmin(): Promise<
+  { ok: true; pasteleriaId: string } | { ok: false; error: string }
+> {
+  try {
+    const { pasteleriaId } = await requireAdminContext();
+    return { ok: true, pasteleriaId };
+  } catch (error) {
+    unstable_rethrow(error);
+
+    const mensaje = mensajeErrorDeInfraestructura(error);
+    if (!mensaje) {
+      throw error;
+    }
+
+    console.error("[pedidos] Fallo de infraestructura en contexto admin:", error);
+    return { ok: false, error: mensaje };
+  }
+}
+
 // Revalida las rutas útiles tras una mutación (aún sin UI en esta issue).
 function revalidatePedidoPaths(clienteId?: string, pedidoId?: string): void {
   revalidatePath(PEDIDOS_PATH);
@@ -70,10 +108,13 @@ function revalidatePedidoPaths(clienteId?: string, pedidoId?: string): void {
 export async function createPedidoAction(
   input: unknown,
 ): Promise<ActionResult<PedidoDetalleDTO>> {
-  const { pasteleriaId } = await requireAdminContext();
+  const contexto = await resolverContextoAdmin();
+  if (!contexto.ok) {
+    return { ok: false, error: contexto.error };
+  }
 
   try {
-    const pedido = await createPedidoService(pasteleriaId, input);
+    const pedido = await createPedidoService(contexto.pasteleriaId, input);
     revalidatePedidoPaths(pedido.cliente_id, pedido.id);
     return { ok: true, data: pedido };
   } catch (error) {
@@ -84,10 +125,13 @@ export async function createPedidoAction(
 export async function listPedidosAction(
   params?: unknown,
 ): Promise<ActionResult<PedidoListItemDTO[]>> {
-  const { pasteleriaId } = await requireAdminContext();
+  const contexto = await resolverContextoAdmin();
+  if (!contexto.ok) {
+    return { ok: false, error: contexto.error };
+  }
 
   try {
-    const pedidos = await listPedidosService(pasteleriaId, params);
+    const pedidos = await listPedidosService(contexto.pasteleriaId, params);
     return { ok: true, data: pedidos };
   } catch (error) {
     return { ok: false, error: toErrorMessage(error) };
@@ -97,10 +141,13 @@ export async function listPedidosAction(
 export async function getPedidoByIdAction(
   id: string,
 ): Promise<ActionResult<PedidoDetalleDTO>> {
-  const { pasteleriaId } = await requireAdminContext();
+  const contexto = await resolverContextoAdmin();
+  if (!contexto.ok) {
+    return { ok: false, error: contexto.error };
+  }
 
   try {
-    const pedido = await getPedidoByIdService(pasteleriaId, id);
+    const pedido = await getPedidoByIdService(contexto.pasteleriaId, id);
     return { ok: true, data: pedido };
   } catch (error) {
     return { ok: false, error: toErrorMessage(error) };
@@ -111,10 +158,13 @@ export async function updatePedidoAction(
   id: string,
   input: unknown,
 ): Promise<ActionResult<PedidoDetalleDTO>> {
-  const { pasteleriaId } = await requireAdminContext();
+  const contexto = await resolverContextoAdmin();
+  if (!contexto.ok) {
+    return { ok: false, error: contexto.error };
+  }
 
   try {
-    const pedido = await updatePedidoService(pasteleriaId, id, input);
+    const pedido = await updatePedidoService(contexto.pasteleriaId, id, input);
     revalidatePedidoPaths(pedido.cliente_id, pedido.id);
     return { ok: true, data: pedido };
   } catch (error) {
@@ -125,10 +175,16 @@ export async function updatePedidoAction(
 export async function changeEstadoPedidoAction(
   input: unknown,
 ): Promise<ActionResult<PedidoDetalleDTO>> {
-  const { pasteleriaId } = await requireAdminContext();
+  const contexto = await resolverContextoAdmin();
+  if (!contexto.ok) {
+    return { ok: false, error: contexto.error };
+  }
 
   try {
-    const pedido = await changeEstadoPedidoService(pasteleriaId, input);
+    const pedido = await changeEstadoPedidoService(
+      contexto.pasteleriaId,
+      input,
+    );
     revalidatePedidoPaths(pedido.cliente_id, pedido.id);
     return { ok: true, data: pedido };
   } catch (error) {
@@ -144,11 +200,14 @@ export async function changeEstadoPedidoAction(
 export async function obtenerResumenCancelacionPedidoAction(
   input: unknown,
 ): Promise<ActionResult<ResumenCancelacionPedidoDTO>> {
-  const { pasteleriaId } = await requireAdminContext();
+  const contexto = await resolverContextoAdmin();
+  if (!contexto.ok) {
+    return { ok: false, error: contexto.error };
+  }
 
   try {
     const resumen = await obtenerResumenCancelacionPedidoService(
-      pasteleriaId,
+      contexto.pasteleriaId,
       input,
     );
     return { ok: true, data: resumen };
@@ -165,11 +224,14 @@ export async function obtenerResumenCancelacionPedidoAction(
 export async function cancelarPedidoConRetencionDevolucionAction(
   input: unknown,
 ): Promise<ActionResult<PedidoDetalleDTO>> {
-  const { pasteleriaId } = await requireAdminContext();
+  const contexto = await resolverContextoAdmin();
+  if (!contexto.ok) {
+    return { ok: false, error: contexto.error };
+  }
 
   try {
     const pedido = await cancelarPedidoConRetencionDevolucionService(
-      pasteleriaId,
+      contexto.pasteleriaId,
       input,
     );
     revalidatePedidoPaths(pedido.cliente_id, pedido.id);
