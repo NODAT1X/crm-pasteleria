@@ -419,6 +419,23 @@ export const cancelarPedidoSchema = z.strictObject(
   },
 );
 
+/**
+ * Schema para ELIMINAR un pedido (S4-005). Solo acepta `pedido_id`: la
+ * eliminación no admite ningún otro dato desde la UI (nunca `pasteleria_id`).
+ * Estricto: rechaza cualquier campo no reconocido.
+ */
+export const eliminarPedidoSchema = z.strictObject(
+  {
+    pedido_id: pedidoIdSchema,
+  },
+  {
+    error: (issue) =>
+      issue.code === "unrecognized_keys"
+        ? `Se recibieron campos no permitidos: ${issue.keys.join(", ")}.`
+        : undefined,
+  },
+);
+
 // --- Reglas de transición de estado (centralizadas) -------------------------
 
 export type EstadoPedidoValue = EstadoPedido;
@@ -513,4 +530,5 @@ export type UpdatePedidoInput = z.infer<typeof updatePedidoSchema>;
 export type ListPedidosInput = z.infer<typeof listPedidosSchema>;
 export type ChangeEstadoPedidoInput = z.infer<typeof changeEstadoPedidoSchema>;
 export type CancelarPedidoInput = z.infer<typeof cancelarPedidoSchema>;
+export type EliminarPedidoInput = z.infer<typeof eliminarPedidoSchema>;
 export type PedidoIdInput = z.infer<typeof pedidoIdSchema>;

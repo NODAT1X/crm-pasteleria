@@ -8,6 +8,7 @@ import type {
   updatePedidoSchema,
   listPedidosSchema,
   changeEstadoPedidoSchema,
+  eliminarPedidoSchema,
 } from "@/validation/pedidos";
 
 // Tipos de entrada inferidos desde los schemas de Zod (única fuente de verdad,
@@ -17,6 +18,7 @@ export type CreatePedidoInput = z.infer<typeof createPedidoSchema>;
 export type UpdatePedidoInput = z.infer<typeof updatePedidoSchema>;
 export type ListPedidosInput = z.infer<typeof listPedidosSchema>;
 export type ChangeEstadoPedidoInput = z.infer<typeof changeEstadoPedidoSchema>;
+export type EliminarPedidoInput = z.infer<typeof eliminarPedidoSchema>;
 
 /**
  * Resultado estándar y serializable de las Server Actions.
@@ -71,11 +73,19 @@ type PedidoBaseDTO = {
 // `total_pagado`/`saldo_pendiente`/`estado_pago` se calculan en el service
 // reutilizando la misma lógica de `pagos.service.ts` (S3-015): nunca se
 // recalculan en la UI.
+//
+// `tiene_movimientos_financieros`/`cantidad_movimientos_financieros` (S4-005)
+// cuentan CUALQUIER movimiento (aplicado o anulado), a diferencia de
+// `total_pagado`/`saldo_pendiente` que solo consideran los aplicados. La UI
+// los usa para decidir el nivel de confirmación al eliminar un pedido, sin
+// necesitar un viaje adicional al servidor.
 export type PedidoListItemDTO = PedidoBaseDTO & {
   cliente: ClienteResumenDTO;
   total_pagado: number;
   saldo_pendiente: number;
   estado_pago: EstadoPagoDerivado;
+  tiene_movimientos_financieros: boolean;
+  cantidad_movimientos_financieros: number;
 };
 
 // Detalle completo: cliente completo + items del pedido.

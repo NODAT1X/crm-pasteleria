@@ -10,6 +10,7 @@ import {
   cancelarPedidoConRetencionDevolucionService,
   changeEstadoPedidoService,
   createPedidoService,
+  eliminarPedidoService,
   getPedidoByIdService,
   listPedidosService,
   obtenerResumenCancelacionPedidoService,
@@ -236,6 +237,33 @@ export async function cancelarPedidoConRetencionDevolucionAction(
     );
     revalidatePedidoPaths(pedido.cliente_id, pedido.id);
     return { ok: true, data: pedido };
+  } catch (error) {
+    return { ok: false, error: toErrorMessage(error) };
+  }
+}
+
+/**
+ * Elimina un pedido del listado de forma transaccional (S4-005): borra el
+ * pedido, sus items y sus movimientos financieros como una unidad completa,
+ * sin afectar al cliente ni a otros pedidos. Solo acepta `pedido_id`; nunca
+ * `pasteleria_id` desde el frontend. Sin restricción por estado (política
+ * MVP S4-004): se permite eliminar en cualquier estado del ciclo de vida.
+ */
+export async function eliminarPedidoAction(
+  input: unknown,
+): Promise<ActionResult<{ pedido_id: string }>> {
+  const contexto = await resolverContextoAdmin();
+  if (!contexto.ok) {
+    return { ok: false, error: contexto.error };
+  }
+
+  try {
+    const { pedido_id, cliente_id } = await eliminarPedidoService(
+      contexto.pasteleriaId,
+      input,
+    );
+    revalidatePedidoPaths(cliente_id, pedido_id);
+    return { ok: true, data: { pedido_id } };
   } catch (error) {
     return { ok: false, error: toErrorMessage(error) };
   }

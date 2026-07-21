@@ -183,6 +183,36 @@ export async function findMovimientosAplicadosByPedidoIds(params: {
   });
 }
 
+/**
+ * Cuenta TODOS los movimientos (aplicados + anulados) de varios pedidos del
+ * tenant, agrupados por `pedido_id`, en una sola consulta batch (evita N+1 al
+ * enriquecer el listado). A diferencia de `findMovimientosAplicadosByPedidoIds`,
+ * aquí NO se filtra por `estado`: la política de eliminación (S4-005) exige
+ * confirmación fuerte si existe CUALQUIER movimiento, incluidos los anulados,
+ * aunque no tengan impacto en el saldo.
+ */
+export async function countMovimientosByPedidoIds(params: {
+  pasteleriaId: string;
+  pedidoIds: string[];
+}): Promise<Map<string, number>> {
+  const { pasteleriaId, pedidoIds } = params;
+
+  if (pedidoIds.length === 0) {
+    return new Map();
+  }
+
+  const grupos = await prisma.movimientoFinanciero.groupBy({
+    by: ["pedido_id"],
+    where: {
+      pasteleria_id: pasteleriaId,
+      pedido_id: { in: pedidoIds },
+    },
+    _count: { _all: true },
+  });
+
+  return new Map(grupos.map((grupo) => [grupo.pedido_id, grupo._count._all]));
+}
+
 /** Un movimiento por id dentro del tenant (o `null`). */
 export async function findMovimientoById(params: {
   pasteleriaId: string;

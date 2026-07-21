@@ -6,6 +6,7 @@ import type { MovimientoFinanciero } from "@/generated/prisma/client";
 import { EstadoPedido, TipoMovimientoPago } from "@/generated/prisma/enums";
 import { findClienteById } from "@/server/repositories/clientes.repository";
 import {
+  countMovimientosByPedidoIds,
   createMovimientoFinanciero,
   findMovimientosAplicadosByPedido,
   findMovimientosAplicadosByPedidoIds,
@@ -14,6 +15,7 @@ import {
 } from "@/server/repositories/movimientos-financieros.repository";
 import {
   createPedidoWithItems,
+  deletePedidoConMovimientos,
   findPedidoDetalle,
   findPedidoEstado,
   listPedidos,
@@ -37,6 +39,7 @@ import {
   cancelarPedidoSchema,
   changeEstadoPedidoSchema,
   createPedidoSchema,
+  eliminarPedidoSchema,
   listPedidosSchema,
   pedidoIdSchema,
   updatePedidoSchema,
@@ -221,6 +224,7 @@ function toItemDTO(item: PedidoDetallePayload["items"][number]): PedidoItemDTO {
 function toListItemDTO(
   pedido: PedidoListPayload,
   movimientosAplicados: MovimientoFinanciero[],
+  cantidadMovimientos: number,
 ): PedidoListItemDTO {
   const totalPagado = sumarPagosAplicados(movimientosAplicados);
   const saldoBruto = pedido.total.minus(totalPagado);
@@ -249,6 +253,8 @@ function toListItemDTO(
     total_pagado: totalPagado.toNumber(),
     saldo_pendiente: saldoPendiente.toNumber(),
     estado_pago: derivarEstadoPago(pedido.total, totalPagado),
+    tiene_movimientos_financieros: cantidadMovimientos > 0,
+    cantidad_movimientos_financieros: cantidadMovimientos,
   };
 }
 
@@ -315,13 +321,17 @@ export async function listPedidosService(
   }
 
   const pedidos = await listPedidos({ pasteleriaId, filters: parsed.data });
+  const pedidoIds = pedidos.map((pedido) => pedido.id);
 
-  // Resumen financiero del listado en UNA sola consulta batch adicional
-  // (evita N+1: sin importar cuántos pedidos haya, siempre son 2 queries).
-  const movimientos = await findMovimientosAplicadosByPedidoIds({
-    pasteleriaId,
-    pedidoIds: pedidos.map((pedido) => pedido.id),
-  });
+  // Resumen financiero del listado en consultas batch adicionales (evita N+1:
+  // sin importar cuántos pedidos haya, siempre son 3 queries en total).
+  //  - `movimientos` (solo aplicados): total pagado / saldo / estado de pago.
+  //  - `cantidadPorPedido` (aplicados + anulados, S4-005): decide si el
+  //    listado debe ofrecer confirmación simple o fuerte al eliminar.
+  const [movimientos, cantidadPorPedido] = await Promise.all([
+    findMovimientosAplicadosByPedidoIds({ pasteleriaId, pedidoIds }),
+    countMovimientosByPedidoIds({ pasteleriaId, pedidoIds }),
+  ]);
 
   const movimientosPorPedido = new Map<string, MovimientoFinanciero[]>();
   for (const movimiento of movimientos) {
@@ -331,7 +341,11 @@ export async function listPedidosService(
   }
 
   return pedidos.map((pedido) =>
-    toListItemDTO(pedido, movimientosPorPedido.get(pedido.id) ?? []),
+    toListItemDTO(
+      pedido,
+      movimientosPorPedido.get(pedido.id) ?? [],
+      cantidadPorPedido.get(pedido.id) ?? 0,
+    ),
   );
 }
 
@@ -750,4 +764,43 @@ export async function cancelarPedidoConRetencionDevolucionService(
       { isolationLevel: Prisma.TransactionIsolationLevel.Serializable },
     ),
   );
+}
+
+// --- Eliminación MVP (S4-005) ------------------------------------------------
+
+/**
+ * Elimina un pedido del tenant como una unidad completa: pedido, items y
+ * movimientos financieros relacionados, sin dejar datos huérfanos y sin
+ * afectar al cliente ni a otros pedidos (política S4-004/S4-005).
+ *
+ * Sin restricción por estado: la política MVP permite eliminar un pedido en
+ * cualquier estado del ciclo de vida (incluidos `entregado` y `cancelado`),
+ * a diferencia de `updatePedidoService`/`changeEstadoPedidoService`. La
+ * decisión de qué confirmación mostrar (simple/fuerte) vive en la UI a partir
+ * de los datos ya presentes en `PedidoListItemDTO`; este service solo ejecuta
+ * el borrado transaccional una vez que el usuario confirmó.
+ */
+export async function eliminarPedidoService(
+  pasteleriaId: string,
+  input: unknown,
+): Promise<{ pedido_id: string; cliente_id: string }> {
+  const parsed = eliminarPedidoSchema.safeParse(input);
+  if (!parsed.success) {
+    throw new PedidoServiceError(formatZodError(parsed.error));
+  }
+
+  const eliminado = await conErroresDeInfraestructuraControlados(() =>
+    deletePedidoConMovimientos({
+      pasteleriaId,
+      id: parsed.data.pedido_id,
+    }),
+  );
+
+  if (!eliminado) {
+    throw new PedidoServiceError(
+      "El pedido no existe o no pertenece a tu pastelería.",
+    );
+  }
+
+  return { pedido_id: eliminado.id, cliente_id: eliminado.cliente_id };
 }
