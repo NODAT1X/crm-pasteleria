@@ -6,6 +6,12 @@ type PedidoFormActionsProps = {
   cancelHref: string;
   isEditMode: boolean;
   isSaving: boolean;
+  /**
+   * Bloquea temporalmente el envío por una causa distinta a "guardando": una
+   * consulta de disponibilidad en curso o un conflicto de horario vigente
+   * (S4-011). No cambia el texto del botón, solo lo deshabilita.
+   */
+  disabled?: boolean;
 };
 
 /**
@@ -16,6 +22,7 @@ export function PedidoFormActions({
   cancelHref,
   isEditMode,
   isSaving,
+  disabled = false,
 }: PedidoFormActionsProps) {
   return (
     <div className="flex flex-col-reverse gap-2 md:flex-row md:justify-end">
@@ -23,7 +30,7 @@ export function PedidoFormActions({
         <Link href={cancelHref}>Cancelar</Link>
       </Button>
 
-      <Button type="submit" disabled={isSaving}>
+      <Button type="submit" disabled={isSaving || disabled}>
         {isSaving
           ? isEditMode
             ? "Guardando cambios..."

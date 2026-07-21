@@ -2,7 +2,9 @@ import {
   TIPO_ENTREGA_OPTIONS,
   getTipoEntregaAyudaDisponibilidad,
 } from "@/modules/pedidos/labels";
+import type { DisponibilidadEntregaEstado } from "@/modules/pedidos/use-disponibilidad-entrega";
 
+import { DisponibilidadEntregaStatus } from "./disponibilidad-entrega-status";
 import type { TipoEntrega } from "./nuevo-pedido-form";
 
 type EntregaFieldsProps = {
@@ -18,6 +20,9 @@ type EntregaFieldsProps = {
   onDireccionEntregaChange: (value: string) => void;
   notasInternas: string;
   onNotasInternasChange: (value: string) => void;
+  disponibilidadEstado: DisponibilidadEntregaEstado;
+  disponibilidadMotivo?: string;
+  disponibilidadMensajeError?: string;
 };
 
 /**
@@ -37,6 +42,9 @@ export function EntregaFields({
   onDireccionEntregaChange,
   notasInternas,
   onNotasInternasChange,
+  disponibilidadEstado,
+  disponibilidadMotivo,
+  disponibilidadMensajeError,
 }: EntregaFieldsProps) {
   return (
     <div className="grid gap-4 md:grid-cols-2">
@@ -108,6 +116,18 @@ export function EntregaFields({
         >
           {getTipoEntregaAyudaDisponibilidad(tipoEntrega)}
         </p>
+
+        {/*
+         * Resultado visual de disponibilidad (S4-011): refleja la consulta a
+         * `verificarDisponibilidadEntregaAction` (S4-008) sin reinterpretar la
+         * ventana de 30 minutos en el cliente. El backend sigue validando de
+         * forma definitiva al guardar.
+         */}
+        <DisponibilidadEntregaStatus
+          estado={disponibilidadEstado}
+          motivo={disponibilidadMotivo}
+          mensajeError={disponibilidadMensajeError}
+        />
       </div>
 
       {tipoEntrega === "domicilio" ? (
