@@ -6,6 +6,7 @@ import type { MovimientoFinanciero } from "@/generated/prisma/client";
 import { EstadoPedido, TipoMovimientoPago } from "@/generated/prisma/enums";
 import { findClienteById } from "@/server/repositories/clientes.repository";
 import {
+  countMovimientosByPedidoIds,
   createMovimientoFinanciero,
   findMovimientosAplicadosByPedido,
   findMovimientosAplicadosByPedidoIds,
@@ -14,6 +15,7 @@ import {
 } from "@/server/repositories/movimientos-financieros.repository";
 import {
   createPedidoWithItems,
+  deletePedidoConMovimientos,
   findPedidoDetalle,
   findPedidoEstado,
   listPedidos,
@@ -29,6 +31,7 @@ import {
   derivarEstadoPago,
   evaluarAnticipoConfirmacion,
   mensajeAnticipoInsuficiente,
+  mensajeErrorDeInfraestructura,
   sumarPagosAplicados,
   type ResumenCancelacion,
 } from "@/server/services/pagos.service";
@@ -36,6 +39,7 @@ import {
   cancelarPedidoSchema,
   changeEstadoPedidoSchema,
   createPedidoSchema,
+  eliminarPedidoSchema,
   listPedidosSchema,
   pedidoIdSchema,
   updatePedidoSchema,
@@ -83,6 +87,31 @@ export class PedidoServiceError extends Error {
 // español en el schema, así que basta para la UI).
 function formatZodError(error: z.ZodError): string {
   return error.issues.map((issue) => issue.message).join(" ");
+}
+
+/**
+ * Envuelve un flujo transaccional de pedidos: convierte los fallos de
+ * INFRAESTRUCTURA de Prisma (pool saturado, transacción que no pudo abrirse,
+ * conflicto de serialización, BD inalcanzable) en `PedidoServiceError` con un
+ * mensaje funcional, y deja pasar cualquier otro error para que la action lo
+ * registre como inesperado.
+ *
+ * La traducción vive en `pagos.service` para que ambos módulos compartan los
+ * mismos textos. En todos esos casos la transacción se revirtió, así que el
+ * pedido conserva su estado anterior y no queda ningún movimiento a medias.
+ */
+async function conErroresDeInfraestructuraControlados<T>(
+  fn: () => Promise<T>,
+): Promise<T> {
+  try {
+    return await fn();
+  } catch (error) {
+    const mensaje = mensajeErrorDeInfraestructura(error);
+    if (mensaje) {
+      throw new PedidoServiceError(mensaje);
+    }
+    throw error;
+  }
 }
 
 // --- Dinero (aritmética en centavos, sin Float como fuente de verdad) --------
@@ -195,6 +224,7 @@ function toItemDTO(item: PedidoDetallePayload["items"][number]): PedidoItemDTO {
 function toListItemDTO(
   pedido: PedidoListPayload,
   movimientosAplicados: MovimientoFinanciero[],
+  cantidadMovimientos: number,
 ): PedidoListItemDTO {
   const totalPagado = sumarPagosAplicados(movimientosAplicados);
   const saldoBruto = pedido.total.minus(totalPagado);
@@ -223,6 +253,8 @@ function toListItemDTO(
     total_pagado: totalPagado.toNumber(),
     saldo_pendiente: saldoPendiente.toNumber(),
     estado_pago: derivarEstadoPago(pedido.total, totalPagado),
+    tiene_movimientos_financieros: cantidadMovimientos > 0,
+    cantidad_movimientos_financieros: cantidadMovimientos,
   };
 }
 
@@ -289,13 +321,17 @@ export async function listPedidosService(
   }
 
   const pedidos = await listPedidos({ pasteleriaId, filters: parsed.data });
+  const pedidoIds = pedidos.map((pedido) => pedido.id);
 
-  // Resumen financiero del listado en UNA sola consulta batch adicional
-  // (evita N+1: sin importar cuántos pedidos haya, siempre son 2 queries).
-  const movimientos = await findMovimientosAplicadosByPedidoIds({
-    pasteleriaId,
-    pedidoIds: pedidos.map((pedido) => pedido.id),
-  });
+  // Resumen financiero del listado en consultas batch adicionales (evita N+1:
+  // sin importar cuántos pedidos haya, siempre son 3 queries en total).
+  //  - `movimientos` (solo aplicados): total pagado / saldo / estado de pago.
+  //  - `cantidadPorPedido` (aplicados + anulados, S4-005): decide si el
+  //    listado debe ofrecer confirmación simple o fuerte al eliminar.
+  const [movimientos, cantidadPorPedido] = await Promise.all([
+    findMovimientosAplicadosByPedidoIds({ pasteleriaId, pedidoIds }),
+    countMovimientosByPedidoIds({ pasteleriaId, pedidoIds }),
+  ]);
 
   const movimientosPorPedido = new Map<string, MovimientoFinanciero[]>();
   for (const movimiento of movimientos) {
@@ -305,7 +341,11 @@ export async function listPedidosService(
   }
 
   return pedidos.map((pedido) =>
-    toListItemDTO(pedido, movimientosPorPedido.get(pedido.id) ?? []),
+    toListItemDTO(
+      pedido,
+      movimientosPorPedido.get(pedido.id) ?? [],
+      cantidadPorPedido.get(pedido.id) ?? 0,
+    ),
   );
 }
 
@@ -442,84 +482,96 @@ export async function changeEstadoPedidoService(
 
   const { pedido_id, estado_pedido } = parsed.data;
 
-  // Estado actual desde la BD (filtrado por tenant).
-  const actual = await findPedidoEstado({ pasteleriaId, id: pedido_id });
-  if (!actual) {
-    throw new PedidoServiceError(
-      "El pedido no existe o no pertenece a tu pastelería.",
-    );
-  }
+  // TRANSACCIONAL (S4-002): leer estado/total -> validar transición -> validar
+  // el anticipo mínimo -> escribir el nuevo estado ocurre de forma atómica y con
+  // aislamiento `Serializable`. Antes estas lecturas y la escritura corrían
+  // sueltas, así que una anulación de movimiento colada entre la validación del
+  // 50% y el update podía dejar el pedido `confirmado` con anticipo insuficiente.
+  // Si cualquier validación falla, la transacción se revierte y el estado NO
+  // cambia.
+  return conErroresDeInfraestructuraControlados(() =>
+    runMovimientosFinancierosTransaction(
+      async (tx) => {
+        // Una sola lectura del pedido: `findPedidoFinanciero` ya trae
+        // `estado_pedido` y `total`, así la transacción no hace viajes de más.
+        const actual = await findPedidoFinanciero({
+          pasteleriaId,
+          pedidoId: pedido_id,
+          db: tx,
+        });
+        if (!actual) {
+          throw new PedidoServiceError(
+            "El pedido no existe o no pertenece a tu pastelería.",
+          );
+        }
 
-  // Transición validada con la función centralizada de S2-003 (rechaza estados
-  // finales y self-transition).
-  const transicion = validateEstadoPedidoTransition(
-    actual.estado_pedido,
-    estado_pedido,
+        // Transición validada con la función centralizada de S2-003 (rechaza
+        // estados finales y self-transition).
+        const transicion = validateEstadoPedidoTransition(
+          actual.estado_pedido,
+          estado_pedido,
+        );
+        if (!transicion.ok) {
+          throw new PedidoServiceError(transicion.error);
+        }
+
+        // Regla S3-018: pasar de `cotizacion` a `confirmado` exige un anticipo
+        // mínimo del 50% del total. El total y los movimientos se leen SIEMPRE
+        // de la BD dentro de la transacción; nada llega del frontend.
+        if (
+          actual.estado_pedido === EstadoPedido.cotizacion &&
+          estado_pedido === EstadoPedido.confirmado
+        ) {
+          const movimientosAplicados = await findMovimientosAplicadosByPedido({
+            pasteleriaId,
+            pedidoId: pedido_id,
+            db: tx,
+          });
+
+          const anticipo = evaluarAnticipoConfirmacion(
+            actual.total,
+            movimientosAplicados,
+          );
+
+          if (!anticipo.cumple) {
+            throw new PedidoServiceError(mensajeAnticipoInsuficiente(anticipo));
+          }
+        }
+
+        // Anti-bypass S3-019: un pedido con pagos aplicados NO puede cancelarse
+        // por este flujo genérico. Debe usarse el flujo de retención/devolución.
+        if (estado_pedido === EstadoPedido.cancelado) {
+          const aplicados = await findMovimientosAplicadosByPedido({
+            pasteleriaId,
+            pedidoId: pedido_id,
+            db: tx,
+          });
+
+          if (calcularResumenCancelacion(aplicados).tienePagosAplicados) {
+            throw new PedidoServiceError(
+              "Este pedido tiene pagos registrados. Cancélalo desde el flujo de cancelación con retención y devolución para registrar los movimientos financieros.",
+            );
+          }
+        }
+
+        const pedido = await updateEstadoPedido({
+          pasteleriaId,
+          id: pedido_id,
+          estado: estado_pedido,
+          db: tx,
+        });
+
+        if (!pedido) {
+          throw new PedidoServiceError(
+            "El pedido no existe o no pertenece a tu pastelería.",
+          );
+        }
+
+        return toDetalleDTO(pedido);
+      },
+      { isolationLevel: Prisma.TransactionIsolationLevel.Serializable },
+    ),
   );
-  if (!transicion.ok) {
-    throw new PedidoServiceError(transicion.error);
-  }
-
-  // Regla S3-018: pasar de `cotizacion` a `confirmado` exige un anticipo mínimo
-  // del 50% del total.
-  if (
-    actual.estado_pedido === EstadoPedido.cotizacion &&
-    estado_pedido === EstadoPedido.confirmado
-  ) {
-    const pedidoFinanciero = await findPedidoFinanciero({
-      pasteleriaId,
-      pedidoId: pedido_id,
-    });
-
-    if (!pedidoFinanciero) {
-      throw new PedidoServiceError(
-        "El pedido no existe o no pertenece a tu pastelería.",
-      );
-    }
-
-    const movimientosAplicados = await findMovimientosAplicadosByPedido({
-      pasteleriaId,
-      pedidoId: pedido_id,
-    });
-
-    const anticipo = evaluarAnticipoConfirmacion(
-      pedidoFinanciero.total,
-      movimientosAplicados,
-    );
-
-    if (!anticipo.cumple) {
-      throw new PedidoServiceError(mensajeAnticipoInsuficiente(anticipo));
-    }
-  }
-
-  // Anti-bypass S3-019: un pedido con pagos aplicados NO puede cancelarse por
-  // este flujo genérico. Debe usarse el flujo de retención/devolución.
-  if (estado_pedido === EstadoPedido.cancelado) {
-    const aplicados = await findMovimientosAplicadosByPedido({
-      pasteleriaId,
-      pedidoId: pedido_id,
-    });
-
-    if (calcularResumenCancelacion(aplicados).tienePagosAplicados) {
-      throw new PedidoServiceError(
-        "Este pedido tiene pagos registrados. Cancélalo desde el flujo de cancelación con retención y devolución para registrar los movimientos financieros.",
-      );
-    }
-  }
-
-  const pedido = await updateEstadoPedido({
-    pasteleriaId,
-    id: pedido_id,
-    estado: estado_pedido,
-  });
-
-  if (!pedido) {
-    throw new PedidoServiceError(
-      "El pedido no existe o no pertenece a tu pastelería.",
-    );
-  }
-
-  return toDetalleDTO(pedido);
 }
 
 // --- Cancelación con retención / devolución (S3-019) ------------------------
@@ -629,84 +681,126 @@ export async function cancelarPedidoConRetencionDevolucionService(
   }
   const { pedido_id } = parsed.data;
 
-  return runMovimientosFinancierosTransaction(
-    async (tx) => {
-      const actual = await findPedidoEstado({
-        pasteleriaId,
-        id: pedido_id,
-        db: tx,
-      });
-      if (!actual) {
-        throw new PedidoServiceError(
-          "El pedido no existe o no pertenece a tu pastelería.",
-        );
-      }
-
-      const transicion = validateEstadoPedidoTransition(
-        actual.estado_pedido,
-        EstadoPedido.cancelado,
-      );
-      if (!transicion.ok) {
-        throw new PedidoServiceError(transicion.error);
-      }
-
-      const aplicados = await findMovimientosAplicadosByPedido({
-        pasteleriaId,
-        pedidoId: pedido_id,
-        db: tx,
-      });
-      const resumen = calcularResumenCancelacion(aplicados);
-
-      // Retención: solo si es > 0 (no se crean movimientos de monto 0).
-      if (resumen.retencion.greaterThan(0)) {
-        await createMovimientoFinanciero({
+  return conErroresDeInfraestructuraControlados(() =>
+    runMovimientosFinancierosTransaction(
+      async (tx) => {
+        const actual = await findPedidoEstado({
           pasteleriaId,
-          data: {
-            pedido_id,
-            // El caso de uso fija el tipo; nunca viene de la UI.
-            tipo_movimiento: TipoMovimientoPago.retencion,
-            metodo_pago: null,
-            tipo_pago: null,
-            monto: resumen.retencion.toFixed(2),
-            referencia: null,
-            notas: "Retención del 25% del anticipo por cancelación del pedido.",
-          },
+          id: pedido_id,
           db: tx,
         });
-      }
+        if (!actual) {
+          throw new PedidoServiceError(
+            "El pedido no existe o no pertenece a tu pastelería.",
+          );
+        }
 
-      // Devolución: solo si es > 0.
-      if (resumen.devolucion.greaterThan(0)) {
-        await createMovimientoFinanciero({
+        const transicion = validateEstadoPedidoTransition(
+          actual.estado_pedido,
+          EstadoPedido.cancelado,
+        );
+        if (!transicion.ok) {
+          throw new PedidoServiceError(transicion.error);
+        }
+
+        const aplicados = await findMovimientosAplicadosByPedido({
           pasteleriaId,
-          data: {
-            pedido_id,
-            tipo_movimiento: TipoMovimientoPago.devolucion,
-            metodo_pago: null,
-            tipo_pago: null,
-            monto: resumen.devolucion.toFixed(2),
-            referencia: null,
-            notas:
-              "Devolución al cliente por cancelación del pedido (total recibido menos retención).",
-          },
+          pedidoId: pedido_id,
           db: tx,
         });
-      }
+        const resumen = calcularResumenCancelacion(aplicados);
 
-      const pedido = await updateEstadoPedido({
-        pasteleriaId,
-        id: pedido_id,
-        estado: EstadoPedido.cancelado,
-        db: tx,
-      });
-      if (!pedido) {
-        throw new PedidoServiceError(
-          "El pedido no existe o no pertenece a tu pastelería.",
-        );
-      }
+        // Retención: solo si es > 0 (no se crean movimientos de monto 0).
+        if (resumen.retencion.greaterThan(0)) {
+          await createMovimientoFinanciero({
+            pasteleriaId,
+            data: {
+              pedido_id,
+              // El caso de uso fija el tipo; nunca viene de la UI.
+              tipo_movimiento: TipoMovimientoPago.retencion,
+              metodo_pago: null,
+              tipo_pago: null,
+              monto: resumen.retencion.toFixed(2),
+              referencia: null,
+              notas:
+                "Retención del 25% del anticipo por cancelación del pedido.",
+            },
+            db: tx,
+          });
+        }
 
-      return toDetalleDTO(pedido);
-    },
-    { isolationLevel: Prisma.TransactionIsolationLevel.Serializable },
+        // Devolución: solo si es > 0.
+        if (resumen.devolucion.greaterThan(0)) {
+          await createMovimientoFinanciero({
+            pasteleriaId,
+            data: {
+              pedido_id,
+              tipo_movimiento: TipoMovimientoPago.devolucion,
+              metodo_pago: null,
+              tipo_pago: null,
+              monto: resumen.devolucion.toFixed(2),
+              referencia: null,
+              notas:
+                "Devolución al cliente por cancelación del pedido (total recibido menos retención).",
+            },
+            db: tx,
+          });
+        }
+
+        const pedido = await updateEstadoPedido({
+          pasteleriaId,
+          id: pedido_id,
+          estado: EstadoPedido.cancelado,
+          db: tx,
+        });
+        if (!pedido) {
+          throw new PedidoServiceError(
+            "El pedido no existe o no pertenece a tu pastelería.",
+          );
+        }
+
+        return toDetalleDTO(pedido);
+      },
+      { isolationLevel: Prisma.TransactionIsolationLevel.Serializable },
+    ),
   );
+}
+
+// --- Eliminación MVP (S4-005) ------------------------------------------------
+
+/**
+ * Elimina un pedido del tenant como una unidad completa: pedido, items y
+ * movimientos financieros relacionados, sin dejar datos huérfanos y sin
+ * afectar al cliente ni a otros pedidos (política S4-004/S4-005).
+ *
+ * Sin restricción por estado: la política MVP permite eliminar un pedido en
+ * cualquier estado del ciclo de vida (incluidos `entregado` y `cancelado`),
+ * a diferencia de `updatePedidoService`/`changeEstadoPedidoService`. La
+ * decisión de qué confirmación mostrar (simple/fuerte) vive en la UI a partir
+ * de los datos ya presentes en `PedidoListItemDTO`; este service solo ejecuta
+ * el borrado transaccional una vez que el usuario confirmó.
+ */
+export async function eliminarPedidoService(
+  pasteleriaId: string,
+  input: unknown,
+): Promise<{ pedido_id: string; cliente_id: string }> {
+  const parsed = eliminarPedidoSchema.safeParse(input);
+  if (!parsed.success) {
+    throw new PedidoServiceError(formatZodError(parsed.error));
+  }
+
+  const eliminado = await conErroresDeInfraestructuraControlados(() =>
+    deletePedidoConMovimientos({
+      pasteleriaId,
+      id: parsed.data.pedido_id,
+    }),
+  );
+
+  if (!eliminado) {
+    throw new PedidoServiceError(
+      "El pedido no existe o no pertenece a tu pastelería.",
+    );
+  }
+
+  return { pedido_id: eliminado.id, cliente_id: eliminado.cliente_id };
 }

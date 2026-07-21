@@ -10,6 +10,7 @@ import { formatHoraEntrega } from "@/modules/pedidos/formatters";
 import { getEstadoPedidoLabel } from "@/modules/pedidos/labels";
 import { ESTADO_PEDIDO_VALUES } from "@/validation/pedidos";
 
+import { PedidoAccionesListado } from "./_components/pedido-acciones-listado";
 import { PedidosFiltros } from "./_components/pedidos-filtros";
 
 export const dynamic = "force-dynamic";
@@ -203,9 +204,13 @@ export default async function PedidosPage({ searchParams }: PedidosPageProps) {
                     </td>
 
                     <td className="px-4 py-3 text-right">
-                      <Button asChild size="sm" variant="outline">
-                        <Link href={`/pedidos/${pedido.id}`}>Ver detalle</Link>
-                      </Button>
+                      <PedidoAccionesListado
+                        pedidoId={pedido.id}
+                        estadoPedido={pedido.estado_pedido}
+                        tieneMovimientosFinancieros={
+                          pedido.tiene_movimientos_financieros
+                        }
+                      />
                     </td>
                   </tr>
                 ))}

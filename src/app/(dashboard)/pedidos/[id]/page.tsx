@@ -1,6 +1,7 @@
 import Link from "next/link";
 
 import { Button } from "@/components/ui/button";
+import type { EstadoPedido } from "@/generated/prisma/enums";
 import {
   listarMovimientosFinancierosAction,
   obtenerAnticipoConfirmacionPedidoAction,
@@ -59,6 +60,22 @@ function formatValue(value: string | null | undefined) {
   return value && value.trim().length > 0 ? value : "No registrado";
 }
 
+// Clases Tailwind del badge por estado del pedido (solo presentación, local a
+// esta pantalla: `modules/pedidos/labels.ts` no define un badge de estado de
+// pedido como sí lo hace `modules/pagos/labels.ts` para el estado de pago).
+const ESTADO_PEDIDO_BADGE_CLASS: Record<EstadoPedido, string> = {
+  cotizacion: "bg-slate-100 text-slate-700",
+  confirmado: "bg-blue-100 text-blue-700",
+  en_preparacion: "bg-amber-100 text-amber-700",
+  listo_para_entregar: "bg-purple-100 text-purple-700",
+  entregado: "bg-green-100 text-green-700",
+  cancelado: "bg-red-100 text-red-700",
+};
+
+function getEstadoPedidoBadgeClass(estado: EstadoPedido) {
+  return ESTADO_PEDIDO_BADGE_CLASS[estado] ?? "bg-muted text-muted-foreground";
+}
+
 export default async function PedidoDetallePage({
   params,
 }: PedidoDetallePageProps) {
@@ -111,51 +128,116 @@ export default async function PedidoDetallePage({
 
   return (
     <section className="space-y-6">
-      <div className="flex flex-col gap-4 rounded-lg border bg-background p-6 shadow-sm md:flex-row md:items-start md:justify-between">
-        <div className="space-y-2">
-          <p className="text-sm text-muted-foreground">Ficha de pedido</p>
-          <h2 className="text-lg font-semibold">
-            Pedido de {pedido.cliente.nombre}
-          </h2>
-          <p className="text-sm text-muted-foreground">
-            Información general, cliente asociado, artículos, estado y total del
-            pedido.
-          </p>
-        </div>
+      {/* Encabezado operativo: cliente, estado, fecha/hora/tipo de entrega y acciones de navegación. */}
+      <div className="rounded-lg border bg-background p-6 shadow-sm">
+        <div className="flex flex-col gap-4 md:flex-row md:items-start md:justify-between">
+          <div className="space-y-2">
+            <p className="text-sm text-muted-foreground">Ficha de pedido</p>
 
-        <div className="flex flex-wrap gap-2">
-          <Button asChild variant="outline">
-            <Link href="/pedidos">Volver al listado</Link>
-          </Button>
+            <div className="flex flex-wrap items-center gap-2">
+              <h2 className="text-lg font-semibold">
+                {pedido.cliente.nombre}
+              </h2>
+              <span
+                className={`inline-flex items-center rounded-full px-2.5 py-0.5 text-xs font-medium ${getEstadoPedidoBadgeClass(pedido.estado_pedido)}`}
+              >
+                {getEstadoPedidoLabel(pedido.estado_pedido)}
+              </span>
+            </div>
 
-          {esEstadoFinal ? null : (
-            <Button asChild variant="outline">
-              <Link href={`/pedidos/${pedido.id}/editar`}>Editar pedido</Link>
-            </Button>
-          )}
-        </div>
-      </div>
+            <p className="text-sm text-muted-foreground">Cliente asociado</p>
 
-      <div className="grid items-start gap-6 lg:grid-cols-[2fr_1fr_1fr]">
-        <div className="rounded-lg border bg-background p-6 shadow-sm">
-          <h3 className="font-medium">Cliente asociado</h3>
-
-          <div className="mt-4 space-y-2">
-            <p className="text-sm font-medium">{pedido.cliente.nombre}</p>
             <p className="text-sm text-muted-foreground">
-              {formatValue(pedido.cliente.telefono ?? pedido.cliente.whatsapp)}
+              Información general, cliente asociado, artículos, estado y total del
+              pedido.
             </p>
+          </div>
 
-            <Button asChild size="sm" variant="outline">
-              <Link href={`/clientes/${pedido.cliente.id}`}>
-                Ver ficha de cliente
-              </Link>
+          <div className="flex flex-wrap gap-2">
+            <Button asChild variant="outline">
+              <Link href="/pedidos">Volver al listado</Link>
             </Button>
+
+            {esEstadoFinal ? null : (
+              <Button asChild variant="outline">
+                <Link href={`/pedidos/${pedido.id}/editar`}>Editar pedido</Link>
+              </Button>
+            )}
           </div>
         </div>
 
-        <aside className="rounded-lg border bg-background p-6 shadow-sm">
-          <h3 className="font-medium">Estado del pedido</h3>
+        <div className="mt-4 grid grid-cols-2 gap-4 border-t pt-4 sm:grid-cols-3">
+          <div className="space-y-1">
+            <p className="text-xs text-muted-foreground">Fecha de entrega</p>
+            <p className="text-sm font-medium">
+              {formatDate(pedido.fecha_entrega)}
+            </p>
+          </div>
+
+          <div className="space-y-1">
+            <p className="text-xs text-muted-foreground">Hora de entrega</p>
+            <p className="text-sm font-medium">
+              {formatHoraEntrega(pedido.hora_entrega)}
+            </p>
+          </div>
+
+          <div className="space-y-1">
+            <p className="text-xs text-muted-foreground">Tipo de entrega</p>
+            <p className="text-sm font-medium">
+              {getTipoEntregaLabel(pedido.tipo_entrega)}
+            </p>
+          </div>
+        </div>
+      </div>
+
+      {/* Resumen financiero prioritario: responde "cuánto debe" de un vistazo. */}
+      <div className="rounded-lg border bg-background p-6 shadow-sm">
+        <h3 className="font-medium">Resumen financiero</h3>
+
+        {resumenResult.ok ? (
+          <div className="mt-4 grid grid-cols-2 gap-4 sm:grid-cols-4">
+            <div>
+              <p className="text-xs text-muted-foreground">
+                Total del pedido
+              </p>
+              <p className="text-sm font-medium">
+                {formatMoney(resumenResult.data.total_pedido)}
+              </p>
+            </div>
+            <div>
+              <p className="text-xs text-muted-foreground">Total pagado</p>
+              <p className="text-sm font-medium">
+                {formatMoney(resumenResult.data.total_pagado)}
+              </p>
+            </div>
+            <div>
+              <p className="text-xs text-muted-foreground">
+                Saldo pendiente
+              </p>
+              <p className="text-sm font-medium">
+                {formatMoney(resumenResult.data.saldo_pendiente)}
+              </p>
+            </div>
+            <div>
+              <p className="text-xs text-muted-foreground">Estado de pago</p>
+              <span
+                className={`mt-1 inline-flex items-center rounded-full px-2.5 py-0.5 text-xs font-medium ${getEstadoPagoBadgeClass(resumenResult.data.estado_pago)}`}
+              >
+                {getEstadoPagoLabel(resumenResult.data.estado_pago)}
+              </span>
+            </div>
+          </div>
+        ) : (
+          <p className="mt-4 text-sm text-muted-foreground">
+            {resumenResult.error}
+          </p>
+        )}
+      </div>
+
+      {/* Zona de acciones: estado del pedido (incluye cancelación) y pagos, separados en cards propias. */}
+      <div className="grid items-start gap-6 lg:grid-cols-2">
+        <div className="rounded-lg border bg-background p-6 shadow-sm">
+          <h3 className="font-medium">Acciones del pedido</h3>
 
           <div className="mt-4 rounded-lg border bg-muted/30 p-4">
             <p className="text-sm font-medium">
@@ -181,58 +263,38 @@ export default async function PedidoDetallePage({
               estadoActual={pedido.estado_pedido}
             />
           ) : null}
-        </aside>
+        </div>
 
-        <aside className="rounded-lg border bg-background p-6 shadow-sm">
-          <h3 className="font-medium">Resumen de pago</h3>
+        <div className="rounded-lg border bg-background p-6 shadow-sm">
+          <h3 className="font-medium">Pagos</h3>
 
+         <div className="mt-4">
           {resumenResult.ok ? (
-            <div className="mt-4 space-y-3">
-              <div>
-                <p className="text-xs text-muted-foreground">
-                  Total del pedido
-                </p>
+            permiteRegistrarPago ? (
+              <RegistrarPagoForm
+                pedidoId={pedido.id}
+                saldoPendiente={resumenResult.data.saldo_pendiente}
+              />
+            ) : (
+              <div className="space-y-1">
                 <p className="text-sm font-medium">
-                  {formatMoney(resumenResult.data.total_pedido)}
+                  No hay acciones de pago disponibles para este pedido.
+                </p>
+                <p className="text-sm text-muted-foreground">
+                  El estado actual del pedido no permite registrar nuevos pagos.
                 </p>
               </div>
-              <div>
-                <p className="text-xs text-muted-foreground">Total pagado</p>
-                <p className="text-sm font-medium">
-                  {formatMoney(resumenResult.data.total_pagado)}
-                </p>
-              </div>
-              <div>
-                <p className="text-xs text-muted-foreground">
-                  Saldo pendiente
-                </p>
-                <p className="text-sm font-medium">
-                  {formatMoney(resumenResult.data.saldo_pendiente)}
-                </p>
-              </div>
-              <div>
-                <span
-                  className={`inline-flex items-center rounded-full px-2.5 py-0.5 text-xs font-medium ${getEstadoPagoBadgeClass(resumenResult.data.estado_pago)}`}
-                >
-                  {getEstadoPagoLabel(resumenResult.data.estado_pago)}
-                </span>
-              </div>
-
-              {permiteRegistrarPago ? (
-                <RegistrarPagoForm
-                  pedidoId={pedido.id}
-                  saldoPendiente={resumenResult.data.saldo_pendiente}
-                />
-              ) : null}
-            </div>
+            )
           ) : (
-            <p className="mt-4 text-sm text-muted-foreground">
+            <p className="text-sm text-muted-foreground">
               {resumenResult.error}
             </p>
           )}
-        </aside>
+         </div>
+        </div>
       </div>
 
+      {/* Información operativa: entrega y cliente en bloques propios. */}
       <div className="grid gap-6 lg:grid-cols-2">
         <div className="rounded-lg border bg-background p-6 shadow-sm">
           <h3 className="font-medium">Entrega</h3>
@@ -271,12 +333,30 @@ export default async function PedidoDetallePage({
         </div>
 
         <div className="rounded-lg border bg-background p-6 shadow-sm">
-          <h3 className="font-medium">Notas internas</h3>
+          <h3 className="font-medium">Cliente asociado</h3>
 
-          <p className="mt-4 whitespace-pre-wrap text-sm text-muted-foreground">
-            {formatValue(pedido.notas_internas)}
-          </p>
+          <div className="mt-4 space-y-2">
+            <p className="text-sm font-medium">{pedido.cliente.nombre}</p>
+            <p className="text-sm text-muted-foreground">
+              {formatValue(pedido.cliente.telefono ?? pedido.cliente.whatsapp)}
+            </p>
+
+            <Button asChild size="sm" variant="outline">
+              <Link href={`/clientes/${pedido.cliente.id}`}>
+                Ver ficha de cliente
+              </Link>
+            </Button>
+          </div>
         </div>
+      </div>
+
+      {/* Notas internas: información secundaria, ya no compite con entrega. */}
+      <div className="rounded-lg border bg-background p-6 shadow-sm">
+        <h3 className="font-medium">Notas internas</h3>
+
+        <p className="mt-4 whitespace-pre-wrap text-sm text-muted-foreground">
+          {formatValue(pedido.notas_internas)}
+        </p>
       </div>
 
       <div className="overflow-hidden rounded-lg border bg-background shadow-sm">

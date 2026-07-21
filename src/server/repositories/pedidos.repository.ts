@@ -333,3 +333,61 @@ export async function updateEstadoPedido(params: {
     include: detalleInclude,
   });
 }
+
+// --- Eliminar pedido (S4-005) ------------------------------------------------
+
+export type PedidoEliminadoData = {
+  id: string;
+  cliente_id: string;
+  estado_pedido: EstadoPedido;
+};
+
+/**
+ * Elimina un Pedido junto con sus PedidoItem y MovimientoFinanciero como una
+ * unidad completa, dentro de una única transacción interactiva.
+ *
+ * Ninguna de las dos relaciones (`PedidoItem.pedido_id`, `MovimientoFinanciero.
+ * pedido_id`) tiene `onDelete: Cascade` en el schema (son FKs reales de
+ * Postgres, requeridas -> default `Restrict`), así que `prisma.pedido.delete`
+ * fallaría por violación de FK si hay hijos. Por eso el orden es SIEMPRE:
+ * movimientos financieros -> items -> pedido.
+ *
+ * Barrera multi-tenant: cada paso filtra por `pasteleria_id` (nunca se borra
+ * por `id` suelto). Devuelve `null` si el pedido no existe o es de otro
+ * tenant, sin tocar nada (política S4-004: sin restricción por estado, se
+ * permite eliminar en cualquier estado del ciclo de vida).
+ */
+export async function deletePedidoConMovimientos(params: {
+  pasteleriaId: string;
+  id: string;
+}): Promise<PedidoEliminadoData | null> {
+  const { pasteleriaId, id } = params;
+
+  return prisma.$transaction(async (tx) => {
+    const existing = await tx.pedido.findFirst({
+      where: { id, pasteleria_id: pasteleriaId },
+      select: { id: true, cliente_id: true, estado_pedido: true },
+    });
+    if (!existing) {
+      return null;
+    }
+
+    await tx.movimientoFinanciero.deleteMany({
+      where: { pedido_id: id, pasteleria_id: pasteleriaId },
+    });
+
+    await tx.pedidoItem.deleteMany({
+      where: { pedido_id: id, pasteleria_id: pasteleriaId },
+    });
+
+    const deleted = await tx.pedido.deleteMany({
+      where: { id, pasteleria_id: pasteleriaId },
+    });
+
+    if (deleted.count === 0) {
+      return null;
+    }
+
+    return existing;
+  });
+}
