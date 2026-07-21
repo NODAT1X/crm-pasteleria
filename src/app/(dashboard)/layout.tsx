@@ -53,6 +53,11 @@ export default async function DashboardLayout({
             <Link href="/pedidos">Pedidos</Link>
           </Button>
 
+          {/* Vista diaria operativa de entregas (S4-012). */}
+          <Button asChild variant="ghost">
+            <Link href="/entregas">Entregas</Link>
+          </Button>
+
             <LogoutButton />
           </nav>
         </div>
