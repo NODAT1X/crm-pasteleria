@@ -67,6 +67,31 @@ export function getTipoEntregaLabel(tipo: TipoEntrega): string {
   return TIPO_ENTREGA_LABEL[tipo] ?? TIPO_ENTREGA_FALLBACK_LABEL;
 }
 
+/**
+ * Texto de ayuda que explica el efecto de cada tipo de entrega sobre la
+ * disponibilidad operativa de reparto (S4-009). Solo presentación: refuerza la
+ * regla de S4-008 sin reimplementarla —únicamente las entregas a domicilio
+ * ocupan una ventana de reparto de 30 minutos; las recolecciones en sucursal no
+ * bloquean y pueden compartir horario con otros pedidos.
+ */
+export const TIPO_ENTREGA_AYUDA_DISPONIBILIDAD: Record<TipoEntrega, string> = {
+  domicilio:
+    "Las entregas a domicilio ocupan una ventana de reparto de 30 minutos desde su hora programada. Si este horario cae dentro de una ventana activa, el sistema lo bloqueará.",
+  recoleccion:
+    "Las recolecciones en sucursal no bloquean disponibilidad de reparto. Pueden compartir horario con otros pedidos.",
+};
+
+const TIPO_ENTREGA_AYUDA_FALLBACK =
+  "Selecciona el tipo de entrega del pedido.";
+
+/**
+ * Ayuda visible sobre disponibilidad de reparto según el tipo de entrega
+ * (S4-009). No decide nada: la regla real vive en el backend (S4-008).
+ */
+export function getTipoEntregaAyudaDisponibilidad(tipo: TipoEntrega): string {
+  return TIPO_ENTREGA_AYUDA_DISPONIBILIDAD[tipo] ?? TIPO_ENTREGA_AYUDA_FALLBACK;
+}
+
 /** Texto del botón que mueve el pedido al estado destino indicado. */
 export function getAccionCambioEstadoPedidoLabel(estado: EstadoPedido): string {
   return (

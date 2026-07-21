@@ -7,7 +7,10 @@ import {
 } from "@/modules/pagos/labels";
 import { listPedidosAction } from "@/modules/pedidos/actions";
 import { formatHoraEntrega } from "@/modules/pedidos/formatters";
-import { getEstadoPedidoLabel } from "@/modules/pedidos/labels";
+import {
+  getEstadoPedidoLabel,
+  getTipoEntregaLabel,
+} from "@/modules/pedidos/labels";
 import { ESTADO_PEDIDO_VALUES } from "@/validation/pedidos";
 
 import { PedidoAccionesListado } from "./_components/pedido-acciones-listado";
@@ -180,6 +183,11 @@ export default async function PedidosPage({ searchParams }: PedidosPageProps) {
 
                     <td className="px-4 py-3">
                       {formatHoraEntrega(pedido.hora_entrega)}
+                      {/* Tipo de entrega (S4-009): diferencia reparto (domicilio,
+                          sujeto a disponibilidad) de recolección en sucursal. */}
+                      <div className="text-xs text-muted-foreground">
+                        {getTipoEntregaLabel(pedido.tipo_entrega)}
+                      </div>
                     </td>
 
                     <td className="px-4 py-3">
