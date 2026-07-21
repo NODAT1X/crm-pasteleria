@@ -17,6 +17,7 @@ import {
 import { listPedidosDelDiaAction } from "@/modules/pedidos/actions";
 
 import { SelectorFechaEntregas } from "./_components/selector-fecha-entregas";
+import { SelectorVistaEntregas } from "./_components/selector-vista-entregas";
 
 // Depende de la sesión/BD (misma razón que el resto del grupo `(dashboard)`):
 // nunca se prerenderiza.
@@ -76,6 +77,8 @@ export default async function EntregasPage({
             en la fecha seleccionada.
           </p>
         </div>
+
+        <SelectorVistaEntregas vista="dia" fecha={fecha} />
 
         <SelectorFechaEntregas fecha={fecha} />
 

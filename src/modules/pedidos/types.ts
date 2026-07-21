@@ -100,6 +100,41 @@ export type PedidoDetalleDTO = PedidoBaseDTO & {
 };
 
 /**
+ * Elemento de un pedido dentro de la vista SEMANAL de entregas (S4-013).
+ * Deliberadamente más liviano que `PedidoListItemDTO`: no incluye dinero ni
+ * estado de pago (esa vista es de carga operativa, no financiera; ver
+ * `listPedidosDeLaSemanaService`), solo lo mínimo para el criterio de
+ * aceptación (hora, cliente, estado, tipo de entrega) y enlazar al detalle.
+ */
+export type PedidoSemanaItemDTO = {
+  id: string;
+  cliente: Pick<ClienteResumenDTO, "id" | "nombre">;
+  fecha_entrega: Date;
+  hora_entrega: string;
+  estado_pedido: EstadoPedido;
+  tipo_entrega: TipoEntrega;
+};
+
+// Un día calendario de la semana consultada, con sus pedidos ya en el mismo
+// orden que devuelve la consulta (fecha, hora, desempate estable). Siempre hay
+// 7 elementos en `SemanaEntregasDTO.dias`, aunque `pedidos` venga vacío.
+export type DiaSemanaEntregasDTO = {
+  fecha: string;
+  pedidos: PedidoSemanaItemDTO[];
+};
+
+/**
+ * Resultado de la vista semanal de entregas (S4-013): la semana (lunes a
+ * domingo) que contiene la fecha ancla recibida, con sus 7 días y los pedidos
+ * agrupados por día.
+ */
+export type SemanaEntregasDTO = {
+  lunes: string;
+  domingo: string;
+  dias: DiaSemanaEntregasDTO[];
+};
+
+/**
  * Resultado de la consulta de disponibilidad de una entrega (S4-008). DTO plano
  * y serializable a través del límite RSC.
  *

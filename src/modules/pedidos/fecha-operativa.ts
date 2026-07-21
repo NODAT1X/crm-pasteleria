@@ -152,3 +152,87 @@ export function formatFechaOperativaLarga(value: string): string {
     timeZone: "UTC",
   }).format(fecha);
 }
+
+/**
+ * Nombre del día de la semana de una fecha operativa "YYYY-MM-DD" (p. ej.
+ * "Lunes"), capitalizado. Usado por las tarjetas de día de la vista semanal
+ * (S4-013). Mismo criterio `timeZone: "UTC"` que el resto del módulo: el día
+ * de la semana se calcula del string de calendario, nunca de la zona del
+ * proceso.
+ */
+export function formatNombreDiaSemana(value: string): string {
+  const fecha = new Date(`${value}T00:00:00.000Z`);
+  const nombre = new Intl.DateTimeFormat("es-MX", {
+    weekday: "long",
+    timeZone: "UTC",
+  }).format(fecha);
+  return nombre.charAt(0).toUpperCase() + nombre.slice(1);
+}
+
+/**
+ * Fecha operativa "YYYY-MM-DD" a un texto corto sin año (p. ej. "5 de
+ * agosto"), para las tarjetas de día de la vista semanal (S4-013) donde el año
+ * ya aparece en el encabezado del rango (`formatRangoSemanaLarga`).
+ */
+export function formatFechaOperativaCorta(value: string): string {
+  const fecha = new Date(`${value}T00:00:00.000Z`);
+  return new Intl.DateTimeFormat("es-MX", {
+    day: "numeric",
+    month: "long",
+    timeZone: "UTC",
+  }).format(fecha);
+}
+
+const MESES_ES = [
+  "enero",
+  "febrero",
+  "marzo",
+  "abril",
+  "mayo",
+  "junio",
+  "julio",
+  "agosto",
+  "septiembre",
+  "octubre",
+  "noviembre",
+  "diciembre",
+];
+
+/**
+ * Encabezado legible del rango lunes–domingo de la vista semanal (S4-013), p.
+ * ej. "21–27 de julio de 2026", o con mes/año explícitos en cada extremo
+ * cuando la semana cruza de mes ("28 de julio–3 de agosto de 2026") o de año
+ * ("29 de diciembre de 2025–4 de enero de 2026"). Preposiciones y meses en
+ * minúsculas (escritura natural en español); el guion no lleva espacios
+ * alrededor.
+ *
+ * Trabaja directamente sobre los componentes del string "YYYY-MM-DD" (sin
+ * pasar por `Date`/`Intl`): son valores de calendario ya validados por
+ * `esFechaOperativaValida` / `fechaOperativaSchema`, así que no hay ambigüedad
+ * de zona horaria que resolver aquí.
+ */
+export function formatRangoSemanaLarga(lunes: string, domingo: string): string {
+  const lunesMatch = FECHA_OPERATIVA_REGEX.exec(lunes);
+  const domingoMatch = FECHA_OPERATIVA_REGEX.exec(domingo);
+  if (!lunesMatch || !domingoMatch) return `${lunes} – ${domingo}`;
+
+  const yLunes = Number(lunesMatch[1]);
+  const mLunes = Number(lunesMatch[2]);
+  const dLunes = Number(lunesMatch[3]);
+  const yDomingo = Number(domingoMatch[1]);
+  const mDomingo = Number(domingoMatch[2]);
+  const dDomingo = Number(domingoMatch[3]);
+
+  const mismoAnio = yLunes === yDomingo;
+  const mismoMes = mismoAnio && mLunes === mDomingo;
+
+  const inicio = mismoMes
+    ? `${dLunes}`
+    : mismoAnio
+      ? `${dLunes} de ${MESES_ES[mLunes - 1]}`
+      : `${dLunes} de ${MESES_ES[mLunes - 1]} de ${yLunes}`;
+
+  const fin = `${dDomingo} de ${MESES_ES[mDomingo - 1]} de ${yDomingo}`;
+
+  return `${inicio}–${fin}`;
+}

@@ -359,6 +359,48 @@ export async function findPedidosDelDia(params: {
   });
 }
 
+// --- Vista semanal de entregas (S4-013) --------------------------------------
+
+/**
+ * Pedidos del tenant con `fecha_entrega` dentro de un rango [desde, hasta)
+ * arbitrario, en los estados que indique el llamador (el service pasa los
+ * mismos estados activos de S4-007/S4-012, `ESTADOS_BLOQUEAN_DISPONIBILIDAD`;
+ * este repositorio no decide esa regla).
+ *
+ * UNA sola consulta por rango para toda la semana (lunes a domingo), en vez de
+ * siete consultas por día: el service calcula `desde` (lunes) / `hasta`
+ * (lunes siguiente, exclusivo) y aquí solo se filtra. Los pedidos eliminados
+ * (hard delete de S4-005) ya no existen en la tabla, así que quedan excluidos
+ * de forma natural.
+ *
+ * Orden: `fecha_entrega` asc (agrupable por día en el service), `hora_entrega`
+ * asc dentro del día y el mismo desempate determinista que la vista diaria
+ * (`created_at` asc, `id` asc).
+ */
+export async function findPedidosPorRango(params: {
+  pasteleriaId: string;
+  desde: Date;
+  hasta: Date;
+  estados: readonly EstadoPedido[];
+}): Promise<PedidoListPayload[]> {
+  const { pasteleriaId, desde, hasta, estados } = params;
+
+  return prisma.pedido.findMany({
+    where: {
+      pasteleria_id: pasteleriaId,
+      estado_pedido: { in: [...estados] },
+      fecha_entrega: { gte: desde, lt: hasta },
+    },
+    include: listInclude,
+    orderBy: [
+      { fecha_entrega: "asc" },
+      { hora_entrega: "asc" },
+      { created_at: "asc" },
+      { id: "asc" },
+    ],
+  });
+}
+
 // --- Editar pedido ----------------------------------------------------------
 
 /**
