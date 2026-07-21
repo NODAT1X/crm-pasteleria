@@ -15,10 +15,12 @@ import {
   listPedidosService,
   obtenerResumenCancelacionPedidoService,
   updatePedidoService,
+  verificarDisponibilidadEntregaService,
 } from "@/server/services/pedidos.service";
 
 import type {
   ActionResult,
+  DisponibilidadEntregaDTO,
   PedidoDetalleDTO,
   PedidoListItemDTO,
   ResumenCancelacionPedidoDTO,
@@ -188,6 +190,32 @@ export async function changeEstadoPedidoAction(
     );
     revalidatePedidoPaths(pedido.cliente_id, pedido.id);
     return { ok: true, data: pedido };
+  } catch (error) {
+    return { ok: false, error: toErrorMessage(error) };
+  }
+}
+
+/**
+ * Consulta la disponibilidad de una entrega (S4-008) sin crear ni editar nada.
+ * Pensada para uso futuro de la UI/calendario: dado `fecha_entrega`,
+ * `hora_entrega`, `tipo_entrega` (y opcionalmente `pedido_id` a excluir en
+ * edición), indica si el horario está libre según la ventana operativa de 30
+ * min. El `pasteleriaId` se deriva del contexto admin; nunca del input.
+ */
+export async function verificarDisponibilidadEntregaAction(
+  input: unknown,
+): Promise<ActionResult<DisponibilidadEntregaDTO>> {
+  const contexto = await resolverContextoAdmin();
+  if (!contexto.ok) {
+    return { ok: false, error: contexto.error };
+  }
+
+  try {
+    const disponibilidad = await verificarDisponibilidadEntregaService(
+      contexto.pasteleriaId,
+      input,
+    );
+    return { ok: true, data: disponibilidad };
   } catch (error) {
     return { ok: false, error: toErrorMessage(error) };
   }

@@ -401,6 +401,37 @@ export const changeEstadoPedidoSchema = z.object({
 });
 
 /**
+ * Schema para CONSULTAR disponibilidad de una entrega (S4-008). Valida la forma
+ * de entrada de la consulta de disponibilidad operativa por ventana de 30 min.
+ *
+ *  - `fecha_entrega` / `hora_entrega` / `tipo_entrega`: la propuesta a evaluar.
+ *  - `pedido_id` opcional: al editar, el pedido a EXCLUIR para no autoconflictuar.
+ *
+ * Es estricto (`strictObject`): rechaza cualquier campo no reconocido enviado
+ * desde el frontend (`pasteleria_id`, `total`, `saldo`, `estado`, ...). El tenant
+ * se deriva SIEMPRE del contexto admin y la regla de bloqueo se resuelve en
+ * backend; nunca se acepta un estado calculado desde la UI.
+ */
+export const verificarDisponibilidadSchema = z.strictObject(
+  {
+    fecha_entrega: fechaEntregaRequerida,
+    hora_entrega: horaEntregaRequerida,
+    tipo_entrega: tipoEntregaValido,
+    pedido_id: z.preprocess(
+      (value) =>
+        typeof value === "string" && value.trim() === "" ? undefined : value,
+      pedidoIdSchema.optional(),
+    ),
+  },
+  {
+    error: (issue) =>
+      issue.code === "unrecognized_keys"
+        ? `Se recibieron campos no permitidos: ${issue.keys.join(", ")}.`
+        : undefined,
+  },
+);
+
+/**
  * Schema para CANCELAR un pedido con retención/devolución (S3-019). Solo acepta
  * `pedido_id`: los montos de retención y devolución se calculan SIEMPRE en el
  * backend desde los movimientos aplicados, nunca vienen del frontend. Es
@@ -529,6 +560,9 @@ export type CreatePedidoInput = z.infer<typeof createPedidoSchema>;
 export type UpdatePedidoInput = z.infer<typeof updatePedidoSchema>;
 export type ListPedidosInput = z.infer<typeof listPedidosSchema>;
 export type ChangeEstadoPedidoInput = z.infer<typeof changeEstadoPedidoSchema>;
+export type VerificarDisponibilidadInput = z.infer<
+  typeof verificarDisponibilidadSchema
+>;
 export type CancelarPedidoInput = z.infer<typeof cancelarPedidoSchema>;
 export type EliminarPedidoInput = z.infer<typeof eliminarPedidoSchema>;
 export type PedidoIdInput = z.infer<typeof pedidoIdSchema>;
