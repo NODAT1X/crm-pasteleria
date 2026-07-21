@@ -3,7 +3,13 @@ import { z } from "zod";
 import { Prisma } from "@/generated/prisma/client";
 import type { Cliente } from "@/generated/prisma/client";
 import type { MovimientoFinanciero } from "@/generated/prisma/client";
-import { EstadoPedido, TipoMovimientoPago } from "@/generated/prisma/enums";
+import { EstadoPedido, TipoEntrega, TipoMovimientoPago } from "@/generated/prisma/enums";
+import {
+  ESTADOS_BLOQUEAN_DISPONIBILIDAD,
+  detectarConflictoDomicilio,
+  mensajeConflictoDisponibilidad,
+  type ConflictoDisponibilidad,
+} from "@/modules/pedidos/disponibilidad";
 import { findClienteById } from "@/server/repositories/clientes.repository";
 import {
   countMovimientosByPedidoIds,
@@ -16,7 +22,9 @@ import {
 import {
   createPedidoWithItems,
   deletePedidoConMovimientos,
+  findBloqueosDomicilioPorFecha,
   findPedidoDetalle,
+  findPedidoEntrega,
   findPedidoEstado,
   listPedidos,
   updateEstadoPedido,
@@ -44,10 +52,12 @@ import {
   pedidoIdSchema,
   updatePedidoSchema,
   validateEstadoPedidoTransition,
+  verificarDisponibilidadSchema,
   type PedidoItemInput,
 } from "@/validation/pedidos";
 
 import type {
+  DisponibilidadEntregaDTO,
   PedidoDetalleDTO,
   PedidoItemDTO,
   PedidoListItemDTO,
@@ -276,6 +286,129 @@ function toDetalleDTO(pedido: PedidoDetallePayload): PedidoDetalleDTO {
   };
 }
 
+// --- Disponibilidad de entregas a domicilio (S4-008) ------------------------
+
+/**
+ * Resultado interno de evaluar la disponibilidad de una entrega a domicilio.
+ * Reutilizable por creación, edición y por la consulta explícita.
+ */
+type ResultadoDisponibilidadDomicilio =
+  | { disponible: true }
+  | { disponible: false; motivo: string; conflicto: ConflictoDisponibilidad };
+
+/**
+ * Evalúa si una entrega a DOMICILIO puede registrarse en `fecha_entrega` +
+ * `hora_entrega` sin caer dentro de la ventana operativa de 30 min de otra
+ * entrega a domicilio ACTIVA del mismo tenant y día.
+ *
+ * Barrera multi-tenant: el `pasteleriaId` llega del contexto admin y se propaga
+ * a la consulta; nunca sale del input de negocio. `excludePedidoId` se usa en
+ * edición para no autoconflictuar el pedido consigo mismo. Solo aplica a
+ * domicilio: recolección se resuelve como disponible antes de llamar aquí.
+ */
+async function evaluarDisponibilidadDomicilio(params: {
+  pasteleriaId: string;
+  fecha_entrega: Date;
+  hora_entrega: string;
+  excludePedidoId?: string;
+}): Promise<ResultadoDisponibilidadDomicilio> {
+  const { pasteleriaId, fecha_entrega, hora_entrega, excludePedidoId } = params;
+
+  const bloqueos = await findBloqueosDomicilioPorFecha({
+    pasteleriaId,
+    fecha_entrega,
+    estados: ESTADOS_BLOQUEAN_DISPONIBILIDAD,
+    excludePedidoId,
+  });
+
+  const conflicto = detectarConflictoDomicilio(
+    hora_entrega,
+    bloqueos.map((bloqueo) => ({
+      pedido_id: bloqueo.id,
+      hora_entrega: bloqueo.hora_entrega,
+    })),
+  );
+
+  if (!conflicto) {
+    return { disponible: true };
+  }
+
+  return {
+    disponible: false,
+    motivo: mensajeConflictoDisponibilidad(conflicto),
+    conflicto,
+  };
+}
+
+/**
+ * Regla S4-008 aplicada en creación/edición: si la entrega es a domicilio y su
+ * horario cae dentro de la ventana ocupada de otra entrega a domicilio activa,
+ * rechaza con un error de dominio controlado (mensaje funcional en español).
+ * Para recolección no consulta nada: nunca bloquea disponibilidad.
+ */
+async function assertDisponibilidadEntrega(params: {
+  pasteleriaId: string;
+  tipo_entrega: TipoEntrega;
+  fecha_entrega: Date;
+  hora_entrega: string;
+  excludePedidoId?: string;
+}): Promise<void> {
+  if (params.tipo_entrega !== TipoEntrega.domicilio) {
+    return;
+  }
+
+  const disponibilidad = await evaluarDisponibilidadDomicilio({
+    pasteleriaId: params.pasteleriaId,
+    fecha_entrega: params.fecha_entrega,
+    hora_entrega: params.hora_entrega,
+    excludePedidoId: params.excludePedidoId,
+  });
+
+  if (!disponibilidad.disponible) {
+    throw new PedidoServiceError(disponibilidad.motivo);
+  }
+}
+
+/**
+ * Consulta explícita de disponibilidad (S4-008), pensada para uso futuro de la
+ * UI/calendario. Valida la forma de entrada con Zod y devuelve un DTO sencillo.
+ * Recolección siempre disponible; domicilio se evalúa contra la ventana de 30
+ * min. `pedido_id` opcional excluye el propio pedido al editar.
+ */
+export async function verificarDisponibilidadEntregaService(
+  pasteleriaId: string,
+  input: unknown,
+): Promise<DisponibilidadEntregaDTO> {
+  const parsed = verificarDisponibilidadSchema.safeParse(input);
+  if (!parsed.success) {
+    throw new PedidoServiceError(formatZodError(parsed.error));
+  }
+
+  const { fecha_entrega, hora_entrega, tipo_entrega, pedido_id } = parsed.data;
+
+  // Recolección en sucursal no consume ventana operativa (doc S4-007 §12).
+  if (tipo_entrega !== TipoEntrega.domicilio) {
+    return { disponible: true };
+  }
+
+  const disponibilidad = await evaluarDisponibilidadDomicilio({
+    pasteleriaId,
+    fecha_entrega,
+    hora_entrega,
+    excludePedidoId: pedido_id,
+  });
+
+  if (disponibilidad.disponible) {
+    return { disponible: true };
+  }
+
+  return {
+    disponible: false,
+    motivo: disponibilidad.motivo,
+    conflicto: disponibilidad.conflicto,
+  };
+}
+
 // --- Casos de uso -----------------------------------------------------------
 
 export async function createPedidoService(
@@ -289,6 +422,17 @@ export async function createPedidoService(
 
   // Regla: el cliente debe existir, ser del tenant y estar activo.
   await assertClienteAsignable(pasteleriaId, parsed.data.cliente_id);
+
+  // Regla S4-008: una entrega a domicilio no puede caer dentro de la ventana
+  // operativa de 30 min de otra entrega a domicilio activa del mismo día/tenant.
+  // Recolección no bloquea disponibilidad. Se valida ANTES de crear: no se
+  // persiste un pedido inválido.
+  await assertDisponibilidadEntrega({
+    pasteleriaId,
+    tipo_entrega: parsed.data.tipo_entrega,
+    fecha_entrega: parsed.data.fecha_entrega,
+    hora_entrega: parsed.data.hora_entrega,
+  });
 
   // El backend calcula subtotales y total; el schema no acepta total del input.
   const { items, total } = calcularItemsYTotal(parsed.data.items);
@@ -387,8 +531,9 @@ export async function updatePedidoService(
 
   // Regla S2-009 / S3-019: los pedidos en estado final (entregado o cancelado)
   // no se pueden editar. Este guard protege la Server Action ante llamadas
-  // directas, aunque la UI ya oculte el acceso a la edición.
-  const actual = await findPedidoEstado({ pasteleriaId, id: parsedId.data });
+  // directas, aunque la UI ya oculte el acceso a la edición. Se lee además el
+  // tipo/fecha/hora ACTUALES para poder calcular la entrega efectiva (S4-008).
+  const actual = await findPedidoEntrega({ pasteleriaId, id: parsedId.data });
 
   if (!actual) {
     throw new PedidoServiceError(
@@ -409,6 +554,18 @@ export async function updatePedidoService(
   if (data.cliente_id !== undefined) {
     await assertClienteAsignable(pasteleriaId, data.cliente_id);
   }
+
+  // Regla S4-008: si tras el patch parcial el pedido QUEDA a domicilio, valida
+  // disponibilidad con el tipo/fecha/hora EFECTIVOS (los que no se envían se
+  // conservan del pedido actual) y excluyéndose a sí mismo para no
+  // autoconflictuar. Si el resultado es recolección, no se bloquea nada.
+  await assertDisponibilidadEntrega({
+    pasteleriaId,
+    tipo_entrega: data.tipo_entrega ?? actual.tipo_entrega,
+    fecha_entrega: data.fecha_entrega ?? actual.fecha_entrega,
+    hora_entrega: data.hora_entrega ?? actual.hora_entrega,
+    excludePedidoId: parsedId.data,
+  });
 
   // Copiar solo los campos escalares presentes (undefined = "no tocar"). El
   // estado NO se cambia aquí (eso es exclusivo de changeEstadoPedidoService).
