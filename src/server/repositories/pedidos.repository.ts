@@ -319,6 +319,46 @@ export async function findBloqueosDomicilioPorFecha(params: {
   });
 }
 
+// --- Vista diaria de entregas (S4-012) ---------------------------------------
+
+/**
+ * Pedidos programados para una fecha exacta del tenant (S4-012), en los
+ * estados que el llamador indique (el service pasa los mismos estados activos
+ * de S4-007, `ESTADOS_BLOQUEAN_DISPONIBILIDAD`; este repositorio no decide esa
+ * regla, solo filtra por lo que recibe).
+ *
+ * Reutiliza `rangoDelDiaUTC` (S4-008) para acotar el día completo y
+ * `listInclude` (mismo shape que el listado general) para no duplicar el
+ * include. Los pedidos eliminados (hard delete de S4-005) ya no existen en la
+ * tabla, así que quedan excluidos de forma natural, sin filtro adicional.
+ *
+ * Orden: hora de entrega ascendente y, para empates, un desempate determinista
+ * (`created_at` asc, `id` asc) para que el orden no dependa de cómo Postgres
+ * resuelva el empate entre corridas.
+ */
+export async function findPedidosDelDia(params: {
+  pasteleriaId: string;
+  fecha: Date;
+  estados: readonly EstadoPedido[];
+}): Promise<PedidoListPayload[]> {
+  const { pasteleriaId, fecha, estados } = params;
+  const { gte, lt } = rangoDelDiaUTC(fecha);
+
+  return prisma.pedido.findMany({
+    where: {
+      pasteleria_id: pasteleriaId,
+      estado_pedido: { in: [...estados] },
+      fecha_entrega: { gte, lt },
+    },
+    include: listInclude,
+    orderBy: [
+      { hora_entrega: "asc" },
+      { created_at: "asc" },
+      { id: "asc" },
+    ],
+  });
+}
+
 // --- Editar pedido ----------------------------------------------------------
 
 /**

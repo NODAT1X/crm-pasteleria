@@ -380,6 +380,55 @@ export const listPedidosSchema = z
     },
   );
 
+// --- Vista diaria de entregas (S4-012) ---------------------------------------
+
+// Formato estricto de día calendario "YYYY-MM-DD" (distinto de
+// `fechaEntregaRequerida`, que acepta cualquier string parseable): la vista
+// diaria navega por día operativo puro, sin hora.
+const FECHA_OPERATIVA_REGEX = /^(\d{4})-(\d{2})-(\d{2})$/;
+
+/**
+ * Parsea "YYYY-MM-DD" a `Date` (medianoche UTC) validando que sea un día de
+ * calendario REAL. `new Date(\`${value}T00:00:00.000Z\`)` no basta: JS
+ * normaliza fechas fuera de rango en vez de rechazarlas (p. ej.
+ * "2026-02-30" se reinterpreta silenciosamente como el 2 de marzo), así que
+ * aquí se reconstruyen los componentes UTC del resultado y se comparan contra
+ * los del input; solo se acepta si coinciden exactamente.
+ */
+function parseFechaOperativaEstricta(value: string): Date | null {
+  const match = FECHA_OPERATIVA_REGEX.exec(value);
+  if (!match) return null;
+
+  const year = Number(match[1]);
+  const month = Number(match[2]);
+  const day = Number(match[3]);
+
+  const fecha = new Date(Date.UTC(year, month - 1, day));
+
+  const esFechaReal =
+    fecha.getUTCFullYear() === year &&
+    fecha.getUTCMonth() === month - 1 &&
+    fecha.getUTCDate() === day;
+
+  return esFechaReal ? fecha : null;
+}
+
+/**
+ * Fecha operativa (día calendario) para la vista diaria de entregas (S4-012).
+ * Acepta únicamente "YYYY-MM-DD" y la normaliza a medianoche UTC — mismo
+ * criterio que `fecha_entrega` en el resto del módulo: el día se trata como un
+ * dato calendario puro, nunca como una hora local convertida a UTC. Rechaza
+ * fechas de calendario inexistentes (p. ej. "2026-02-30", "2026-13-01") y
+ * acepta correctamente años bisiestos (p. ej. "2028-02-29").
+ */
+export const fechaOperativaSchema = z.preprocess((value) => {
+  if (typeof value !== "string") return value;
+  const parsed = parseFechaOperativaEstricta(value.trim());
+  return parsed ?? value;
+}, z.date({
+  error: 'La fecha debe tener formato "YYYY-MM-DD" y ser una fecha de calendario válida.',
+}));
+
 // --- Identificador y cambio de estado ---------------------------------------
 
 // Identificador de pedido (cuid). Solo exigimos texto no vacío.

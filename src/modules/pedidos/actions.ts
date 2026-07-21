@@ -12,6 +12,7 @@ import {
   createPedidoService,
   eliminarPedidoService,
   getPedidoByIdService,
+  listPedidosDelDiaService,
   listPedidosService,
   obtenerResumenCancelacionPedidoService,
   updatePedidoService,
@@ -135,6 +136,29 @@ export async function listPedidosAction(
 
   try {
     const pedidos = await listPedidosService(contexto.pasteleriaId, params);
+    return { ok: true, data: pedidos };
+  } catch (error) {
+    return { ok: false, error: toErrorMessage(error) };
+  }
+}
+
+/**
+ * Vista diaria de entregas (S4-012): pedidos del tenant programados para una
+ * fecha exacta, en los estados activos de S4-007 (ver
+ * `listPedidosDelDiaService`). `fecha` es un valor `unknown` (normalmente
+ * "YYYY-MM-DD") que se valida en el service; el `pasteleriaId` se deriva
+ * SIEMPRE del contexto admin, nunca del input.
+ */
+export async function listPedidosDelDiaAction(
+  fecha: unknown,
+): Promise<ActionResult<PedidoListItemDTO[]>> {
+  const contexto = await resolverContextoAdmin();
+  if (!contexto.ok) {
+    return { ok: false, error: contexto.error };
+  }
+
+  try {
+    const pedidos = await listPedidosDelDiaService(contexto.pasteleriaId, fecha);
     return { ok: true, data: pedidos };
   } catch (error) {
     return { ok: false, error: toErrorMessage(error) };

@@ -26,6 +26,7 @@ import {
   findPedidoDetalle,
   findPedidoEntrega,
   findPedidoEstado,
+  findPedidosDelDia,
   listPedidos,
   updateEstadoPedido,
   updatePedidoWithItems,
@@ -48,6 +49,7 @@ import {
   changeEstadoPedidoSchema,
   createPedidoSchema,
   eliminarPedidoSchema,
+  fechaOperativaSchema,
   listPedidosSchema,
   pedidoIdSchema,
   updatePedidoSchema,
@@ -454,24 +456,22 @@ export async function createPedidoService(
   return toDetalleDTO(pedido);
 }
 
-export async function listPedidosService(
+/**
+ * Resumen financiero batch (evita N+1) de una lista de pedidos ya consultada,
+ * mapeada al DTO de listado. Reutilizado por `listPedidosService` y por
+ * `listPedidosDelDiaService` (S4-012) para no duplicar las mismas dos queries
+ * ni el cálculo de total pagado / saldo / estado de pago.
+ *
+ *  - `movimientos` (solo aplicados): total pagado / saldo / estado de pago.
+ *  - `cantidadPorPedido` (aplicados + anulados, S4-005): decide si el
+ *    listado debe ofrecer confirmación simple o fuerte al eliminar.
+ */
+async function mapPedidosConResumenFinanciero(
   pasteleriaId: string,
-  params: unknown,
+  pedidos: PedidoListPayload[],
 ): Promise<PedidoListItemDTO[]> {
-  // `params ?? {}` permite llamar sin argumentos y usar los valores por defecto.
-  const parsed = listPedidosSchema.safeParse(params ?? {});
-  if (!parsed.success) {
-    throw new PedidoServiceError(formatZodError(parsed.error));
-  }
-
-  const pedidos = await listPedidos({ pasteleriaId, filters: parsed.data });
   const pedidoIds = pedidos.map((pedido) => pedido.id);
 
-  // Resumen financiero del listado en consultas batch adicionales (evita N+1:
-  // sin importar cuántos pedidos haya, siempre son 3 queries en total).
-  //  - `movimientos` (solo aplicados): total pagado / saldo / estado de pago.
-  //  - `cantidadPorPedido` (aplicados + anulados, S4-005): decide si el
-  //    listado debe ofrecer confirmación simple o fuerte al eliminar.
   const [movimientos, cantidadPorPedido] = await Promise.all([
     findMovimientosAplicadosByPedidoIds({ pasteleriaId, pedidoIds }),
     countMovimientosByPedidoIds({ pasteleriaId, pedidoIds }),
@@ -491,6 +491,52 @@ export async function listPedidosService(
       cantidadPorPedido.get(pedido.id) ?? 0,
     ),
   );
+}
+
+export async function listPedidosService(
+  pasteleriaId: string,
+  params: unknown,
+): Promise<PedidoListItemDTO[]> {
+  // `params ?? {}` permite llamar sin argumentos y usar los valores por defecto.
+  const parsed = listPedidosSchema.safeParse(params ?? {});
+  if (!parsed.success) {
+    throw new PedidoServiceError(formatZodError(parsed.error));
+  }
+
+  const pedidos = await listPedidos({ pasteleriaId, filters: parsed.data });
+
+  return mapPedidosConResumenFinanciero(pasteleriaId, pedidos);
+}
+
+/**
+ * Vista diaria de entregas (S4-012): pedidos del tenant programados para una
+ * fecha exacta, en los mismos estados ACTIVOS que S4-007 usa para
+ * disponibilidad (`ESTADOS_BLOQUEAN_DISPONIBILIDAD`: cotización, confirmado,
+ * en_preparación, listo_para_entregar). No reinterpreta esa regla ni agrega
+ * filtros nuevos: la reutiliza tal cual. No filtra por tipo de entrega:
+ * domicilio y recolección conviven en la misma vista operativa; solo se
+ * distinguen visualmente en la UI.
+ *
+ * `input` se valida con `fechaOperativaSchema` (día calendario estricto
+ * "YYYY-MM-DD", medianoche UTC) como defensa en profundidad, aunque la página
+ * ya haya saneado la fecha antes de llamar a la action.
+ */
+export async function listPedidosDelDiaService(
+  pasteleriaId: string,
+  input: unknown,
+): Promise<PedidoListItemDTO[]> {
+  const parsed = fechaOperativaSchema.safeParse(input);
+  if (!parsed.success) {
+    throw new PedidoServiceError(formatZodError(parsed.error));
+  }
+
+  const pedidos = await findPedidosDelDia({
+    pasteleriaId,
+    fecha: parsed.data,
+    estados: ESTADOS_BLOQUEAN_DISPONIBILIDAD,
+  });
+
+  return mapPedidosConResumenFinanciero(pasteleriaId, pedidos);
 }
 
 export async function getPedidoByIdService(
