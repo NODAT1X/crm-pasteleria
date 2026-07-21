@@ -27,6 +27,7 @@ import {
   findPedidoEntrega,
   findPedidoEstado,
   findPedidosDelDia,
+  findPedidosPorRango,
   listPedidos,
   updateEstadoPedido,
   updatePedidoWithItems,
@@ -59,11 +60,14 @@ import {
 } from "@/validation/pedidos";
 
 import type {
+  DiaSemanaEntregasDTO,
   DisponibilidadEntregaDTO,
   PedidoDetalleDTO,
   PedidoItemDTO,
   PedidoListItemDTO,
+  PedidoSemanaItemDTO,
   ResumenCancelacionPedidoDTO,
+  SemanaEntregasDTO,
 } from "@/modules/pedidos/types";
 
 /**
@@ -537,6 +541,100 @@ export async function listPedidosDelDiaService(
   });
 
   return mapPedidosConResumenFinanciero(pasteleriaId, pedidos);
+}
+
+// --- Vista semanal de entregas (S4-013) --------------------------------------
+
+// Día calendario (UTC) de `fecha` como "YYYY-MM-DD". `fecha_entrega` se
+// persiste siempre a medianoche UTC (mismo criterio que `fechaOperativaSchema`
+// / `rangoDelDiaUTC`), así que leer los componentes UTC reconstruye el día
+// exacto sin importar la zona horaria del proceso.
+function fechaUTCComoOperativa(fecha: Date): string {
+  const year = fecha.getUTCFullYear();
+  const month = String(fecha.getUTCMonth() + 1).padStart(2, "0");
+  const day = String(fecha.getUTCDate()).padStart(2, "0");
+  return `${year}-${month}-${day}`;
+}
+
+function toSemanaItemDTO(pedido: PedidoListPayload): PedidoSemanaItemDTO {
+  return {
+    id: pedido.id,
+    cliente: { id: pedido.cliente.id, nombre: pedido.cliente.nombre },
+    fecha_entrega: pedido.fecha_entrega,
+    hora_entrega: pedido.hora_entrega,
+    estado_pedido: pedido.estado_pedido,
+    tipo_entrega: pedido.tipo_entrega,
+  };
+}
+
+/**
+ * Vista semanal de entregas (S4-013): pedidos del tenant de lunes a domingo
+ * agrupados por día, en los mismos estados ACTIVOS que la vista diaria de
+ * S4-012 (`ESTADOS_BLOQUEAN_DISPONIBILIDAD`) — no reinterpreta esa regla ni
+ * agrega filtros nuevos.
+ *
+ * `input` es la fecha ANCLA (normalmente "YYYY-MM-DD" desde la URL) validada
+ * con `fechaOperativaSchema`, la misma usada por la vista diaria; no necesita
+ * ser lunes. A partir de esa fecha (ya un `Date` a medianoche UTC) se calcula
+ * el lunes de esa semana con aritmética pura en UTC (`getUTCDay` +
+ * `setUTCDate`, mismo criterio que `rangoDelDiaUTC` / `sumarDiasFechaOperativa`
+ * — nunca la zona horaria del proceso), y de ahí el domingo (lunes + 6) y el
+ * límite exclusivo para la consulta (lunes + 7).
+ *
+ * Solo hace UNA consulta por rango (`findPedidosPorRango`) para las 7 fechas,
+ * nunca 7 consultas independientes. Deliberadamente NO reutiliza
+ * `mapPedidosConResumenFinanciero`: la vista semanal es de carga operativa
+ * (hora, cliente, estado, tipo de entrega), no financiera, así que evita las
+ * dos consultas adicionales de movimientos que sí necesita el listado general.
+ */
+export async function listPedidosDeLaSemanaService(
+  pasteleriaId: string,
+  input: unknown,
+): Promise<SemanaEntregasDTO> {
+  const parsed = fechaOperativaSchema.safeParse(input);
+  if (!parsed.success) {
+    throw new PedidoServiceError(formatZodError(parsed.error));
+  }
+
+  const ancla = parsed.data;
+  // getUTCDay(): 0 = domingo ... 6 = sábado. La semana operativa inicia en
+  // lunes, así que domingo retrocede 6 días y el resto retrocede (día - 1).
+  const diaSemana = ancla.getUTCDay();
+  const offsetALunes = diaSemana === 0 ? -6 : 1 - diaSemana;
+
+  const lunes = new Date(ancla);
+  lunes.setUTCDate(lunes.getUTCDate() + offsetALunes);
+
+  const finExclusivo = new Date(lunes);
+  finExclusivo.setUTCDate(finExclusivo.getUTCDate() + 7);
+
+  const pedidos = await findPedidosPorRango({
+    pasteleriaId,
+    desde: lunes,
+    hasta: finExclusivo,
+    estados: ESTADOS_BLOQUEAN_DISPONIBILIDAD,
+  });
+
+  const pedidosPorDia = new Map<string, PedidoSemanaItemDTO[]>();
+  for (const pedido of pedidos) {
+    const fecha = fechaUTCComoOperativa(pedido.fecha_entrega);
+    const lista = pedidosPorDia.get(fecha) ?? [];
+    lista.push(toSemanaItemDTO(pedido));
+    pedidosPorDia.set(fecha, lista);
+  }
+
+  const dias: DiaSemanaEntregasDTO[] = Array.from({ length: 7 }, (_, i) => {
+    const fechaDia = new Date(lunes);
+    fechaDia.setUTCDate(fechaDia.getUTCDate() + i);
+    const fecha = fechaUTCComoOperativa(fechaDia);
+    return { fecha, pedidos: pedidosPorDia.get(fecha) ?? [] };
+  });
+
+  return {
+    lunes: dias[0].fecha,
+    domingo: dias[6].fecha,
+    dias,
+  };
 }
 
 export async function getPedidoByIdService(

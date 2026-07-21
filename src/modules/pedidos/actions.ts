@@ -13,6 +13,7 @@ import {
   eliminarPedidoService,
   getPedidoByIdService,
   listPedidosDelDiaService,
+  listPedidosDeLaSemanaService,
   listPedidosService,
   obtenerResumenCancelacionPedidoService,
   updatePedidoService,
@@ -25,6 +26,7 @@ import type {
   PedidoDetalleDTO,
   PedidoListItemDTO,
   ResumenCancelacionPedidoDTO,
+  SemanaEntregasDTO,
 } from "./types";
 
 /**
@@ -160,6 +162,33 @@ export async function listPedidosDelDiaAction(
   try {
     const pedidos = await listPedidosDelDiaService(contexto.pasteleriaId, fecha);
     return { ok: true, data: pedidos };
+  } catch (error) {
+    return { ok: false, error: toErrorMessage(error) };
+  }
+}
+
+/**
+ * Vista semanal de entregas (S4-013): pedidos del tenant de lunes a domingo,
+ * agrupados por día, en los mismos estados activos que la vista diaria (ver
+ * `listPedidosDeLaSemanaService`). `fecha` es la fecha ANCLA (`unknown`,
+ * normalmente "YYYY-MM-DD") que el service usa para calcular el lunes y el
+ * domingo de esa semana; el `pasteleriaId` se deriva SIEMPRE del contexto
+ * admin, nunca del input.
+ */
+export async function listPedidosDeLaSemanaAction(
+  fecha: unknown,
+): Promise<ActionResult<SemanaEntregasDTO>> {
+  const contexto = await resolverContextoAdmin();
+  if (!contexto.ok) {
+    return { ok: false, error: contexto.error };
+  }
+
+  try {
+    const semana = await listPedidosDeLaSemanaService(
+      contexto.pasteleriaId,
+      fecha,
+    );
+    return { ok: true, data: semana };
   } catch (error) {
     return { ok: false, error: toErrorMessage(error) };
   }
