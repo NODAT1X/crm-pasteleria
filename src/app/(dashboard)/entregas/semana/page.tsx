@@ -2,6 +2,10 @@ import Link from "next/link";
 
 import type { EstadoPedido, TipoEntrega } from "@/generated/prisma/enums";
 import {
+  sanitizeEstadoPedidoParam,
+  sanitizeTipoEntregaParam,
+} from "@/modules/pedidos/entregas-filtros";
+import {
   formatFechaOperativaCorta,
   formatNombreDiaSemana,
   formatRangoSemanaLarga,
@@ -16,6 +20,7 @@ import {
 import { listPedidosDeLaSemanaAction } from "@/modules/pedidos/actions";
 import type { PedidoSemanaItemDTO } from "@/modules/pedidos/types";
 
+import { EntregasFiltros } from "../_components/entregas-filtros";
 import { SelectorSemanaEntregas } from "../_components/selector-semana-entregas";
 import { SelectorVistaEntregas } from "../_components/selector-vista-entregas";
 
@@ -24,7 +29,7 @@ import { SelectorVistaEntregas } from "../_components/selector-vista-entregas";
 export const dynamic = "force-dynamic";
 
 type EntregasSemanaPageProps = {
-  searchParams?: Promise<{ fecha?: string }>;
+  searchParams?: Promise<{ fecha?: string; estado?: string; tipo?: string }>;
 };
 
 // Mismo criterio de color que la vista diaria (S4-012) y que el detalle
@@ -79,15 +84,21 @@ export default async function EntregasSemanaPage({
 }: EntregasSemanaPageProps) {
   const params = await searchParams;
   const fecha = sanitizeFechaOperativa(params?.fecha);
+  const estado = sanitizeEstadoPedidoParam(params?.estado);
+  const tipo = sanitizeTipoEntregaParam(params?.tipo);
   const hoy = hoyFechaOperativaLocal();
 
   /**
-   * Consulta de la semana en el servidor (S4-013): tenant derivado de
-   * `requireAdminContext` dentro de la action, solo estados activos de S4-007
-   * (los mismos que la vista diaria) y una sola consulta por rango para los 7
-   * días.
+   * Consulta de la semana en el servidor (S4-013 + filtros S4-014): tenant
+   * derivado de `requireAdminContext` dentro de la action y una sola consulta
+   * por rango para los 7 días. Sin filtro de estado se mantiene el
+   * comportamiento base (solo estados activos); un estado explícito —incluidos
+   * cancelado/entregado— y/o un tipo de entrega acotan la vista.
    */
-  const result = await listPedidosDeLaSemanaAction(fecha);
+  const result = await listPedidosDeLaSemanaAction(fecha, {
+    estado_pedido: estado || undefined,
+    tipo_entrega: tipo || undefined,
+  });
 
   return (
     <section className="space-y-6">
@@ -100,9 +111,16 @@ export default async function EntregasSemanaPage({
           </p>
         </div>
 
-        <SelectorVistaEntregas vista="semana" fecha={fecha} />
+        <SelectorVistaEntregas
+          vista="semana"
+          fecha={fecha}
+          estado={estado}
+          tipo={tipo}
+        />
 
         <SelectorSemanaEntregas fecha={fecha} />
+
+        <EntregasFiltros estado={estado} tipo={tipo} />
 
         {result.ok ? (
           <p className="text-sm font-medium">

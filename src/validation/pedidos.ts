@@ -429,6 +429,35 @@ export const fechaOperativaSchema = z.preprocess((value) => {
   error: 'La fecha debe tener formato "YYYY-MM-DD" y ser una fecha de calendario válida.',
 }));
 
+/**
+ * Filtros OPCIONALES del calendario operativo (S4-014), aplicables tanto a la
+ * vista diaria como a la semanal. Ambos campos son opcionales:
+ *
+ *  - `estado_pedido` ausente => el service mantiene el comportamiento base de la
+ *    vista (solo estados activos). Si se especifica un estado (incluidos
+ *    `entregado` y `cancelado`), la vista muestra únicamente ese estado.
+ *  - `tipo_entrega` ausente => se muestran domicilio y recolección; si se
+ *    especifica, solo ese tipo.
+ *
+ * NO acepta `pasteleria_id` (el tenant se deriva del contexto admin) ni fecha
+ * (esa la valida `fechaOperativaSchema`). Un valor vacío se normaliza a
+ * `undefined` (sin filtro).
+ */
+export const entregasFiltrosSchema = z.strictObject({
+  estado_pedido: z.preprocess(
+    (value) =>
+      typeof value === "string" && value.trim() === "" ? undefined : value,
+    estadoPedidoValido.optional(),
+  ),
+  tipo_entrega: z.preprocess(
+    (value) =>
+      typeof value === "string" && value.trim() === "" ? undefined : value,
+    tipoEntregaValido.optional(),
+  ),
+});
+
+export type EntregasFiltrosInput = z.infer<typeof entregasFiltrosSchema>;
+
 // --- Identificador y cambio de estado ---------------------------------------
 
 // Identificador de pedido (cuid). Solo exigimos texto no vacío.

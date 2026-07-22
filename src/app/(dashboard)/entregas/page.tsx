@@ -6,6 +6,10 @@ import {
   getEstadoPagoLabel,
 } from "@/modules/pagos/labels";
 import {
+  sanitizeEstadoPedidoParam,
+  sanitizeTipoEntregaParam,
+} from "@/modules/pedidos/entregas-filtros";
+import {
   formatFechaOperativaLarga,
   sanitizeFechaOperativa,
 } from "@/modules/pedidos/fecha-operativa";
@@ -16,6 +20,7 @@ import {
 } from "@/modules/pedidos/labels";
 import { listPedidosDelDiaAction } from "@/modules/pedidos/actions";
 
+import { EntregasFiltros } from "./_components/entregas-filtros";
 import { SelectorFechaEntregas } from "./_components/selector-fecha-entregas";
 import { SelectorVistaEntregas } from "./_components/selector-vista-entregas";
 
@@ -24,7 +29,7 @@ import { SelectorVistaEntregas } from "./_components/selector-vista-entregas";
 export const dynamic = "force-dynamic";
 
 type EntregasPageProps = {
-  searchParams?: Promise<{ fecha?: string }>;
+  searchParams?: Promise<{ fecha?: string; estado?: string; tipo?: string }>;
 };
 
 /** Muestra el saldo pendiente del pedido como moneda MXN. */
@@ -58,13 +63,20 @@ export default async function EntregasPage({
 }: EntregasPageProps) {
   const params = await searchParams;
   const fecha = sanitizeFechaOperativa(params?.fecha);
+  const estado = sanitizeEstadoPedidoParam(params?.estado);
+  const tipo = sanitizeTipoEntregaParam(params?.tipo);
 
   /**
-   * Consulta del día en el servidor (S4-012): tenant derivado de
-   * `requireAdminContext` dentro de la action, solo estados activos de S4-007
-   * y solo pedidos existentes (los eliminados ya no están en la tabla).
+   * Consulta del día en el servidor (S4-012 + filtros S4-014): tenant derivado
+   * de `requireAdminContext` dentro de la action y solo pedidos existentes (los
+   * eliminados ya no están en la tabla). Sin filtro de estado se mantiene el
+   * comportamiento base (solo estados activos); un estado explícito —incluidos
+   * cancelado/entregado— y/o un tipo de entrega acotan la vista.
    */
-  const result = await listPedidosDelDiaAction(fecha);
+  const result = await listPedidosDelDiaAction(fecha, {
+    estado_pedido: estado || undefined,
+    tipo_entrega: tipo || undefined,
+  });
   const pedidos = result.ok ? result.data : [];
 
   return (
@@ -78,9 +90,16 @@ export default async function EntregasPage({
           </p>
         </div>
 
-        <SelectorVistaEntregas vista="dia" fecha={fecha} />
+        <SelectorVistaEntregas
+          vista="dia"
+          fecha={fecha}
+          estado={estado}
+          tipo={tipo}
+        />
 
         <SelectorFechaEntregas fecha={fecha} />
+
+        <EntregasFiltros estado={estado} tipo={tipo} />
 
         <p className="text-sm font-medium capitalize">
           {formatFechaOperativaLarga(fecha)}

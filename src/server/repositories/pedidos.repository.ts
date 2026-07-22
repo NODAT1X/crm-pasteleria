@@ -340,8 +340,9 @@ export async function findPedidosDelDia(params: {
   pasteleriaId: string;
   fecha: Date;
   estados: readonly EstadoPedido[];
+  tipoEntrega?: TipoEntrega;
 }): Promise<PedidoListPayload[]> {
-  const { pasteleriaId, fecha, estados } = params;
+  const { pasteleriaId, fecha, estados, tipoEntrega } = params;
   const { gte, lt } = rangoDelDiaUTC(fecha);
 
   return prisma.pedido.findMany({
@@ -349,6 +350,9 @@ export async function findPedidosDelDia(params: {
       pasteleria_id: pasteleriaId,
       estado_pedido: { in: [...estados] },
       fecha_entrega: { gte, lt },
+      // Filtro opcional por tipo de entrega (S4-014); si es undefined, no se
+      // agrega y conviven domicilio y recolección.
+      ...(tipoEntrega ? { tipo_entrega: tipoEntrega } : {}),
     },
     include: listInclude,
     orderBy: [
@@ -382,14 +386,18 @@ export async function findPedidosPorRango(params: {
   desde: Date;
   hasta: Date;
   estados: readonly EstadoPedido[];
+  tipoEntrega?: TipoEntrega;
 }): Promise<PedidoListPayload[]> {
-  const { pasteleriaId, desde, hasta, estados } = params;
+  const { pasteleriaId, desde, hasta, estados, tipoEntrega } = params;
 
   return prisma.pedido.findMany({
     where: {
       pasteleria_id: pasteleriaId,
       estado_pedido: { in: [...estados] },
       fecha_entrega: { gte: desde, lt: hasta },
+      // Filtro opcional por tipo de entrega (S4-014); si es undefined, no se
+      // agrega y conviven domicilio y recolección.
+      ...(tipoEntrega ? { tipo_entrega: tipoEntrega } : {}),
     },
     include: listInclude,
     orderBy: [

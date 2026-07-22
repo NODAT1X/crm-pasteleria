@@ -50,6 +50,7 @@ import {
   changeEstadoPedidoSchema,
   createPedidoSchema,
   eliminarPedidoSchema,
+  entregasFiltrosSchema,
   fechaOperativaSchema,
   listPedidosSchema,
   pedidoIdSchema,
@@ -513,13 +514,43 @@ export async function listPedidosService(
 }
 
 /**
+ * Resuelve los filtros OPCIONALES del calendario (S4-014), compartidos por la
+ * vista diaria y la semanal. Valida la forma con `entregasFiltrosSchema` (nunca
+ * confía en el input crudo; jamás acepta `pasteleria_id`).
+ *
+ *  - Sin `estado_pedido`: se mantiene el comportamiento BASE de la vista (solo
+ *    estados activos de S4-007, `ESTADOS_BLOQUEAN_DISPONIBILIDAD`). Con un estado
+ *    específico (incluidos `entregado`/`cancelado`), la vista muestra solo ese.
+ *  - `tipo_entrega` ausente: ambos tipos; presente: solo ese tipo.
+ *
+ * No modifica la regla de disponibilidad ni los estados bloqueantes de S4-008:
+ * `ESTADOS_BLOQUEAN_DISPONIBILIDAD` se reutiliza tal cual como default de la vista.
+ */
+function resolverFiltrosEntregas(filtros: unknown): {
+  estados: readonly EstadoPedido[];
+  tipoEntrega?: TipoEntrega;
+} {
+  const parsed = entregasFiltrosSchema.safeParse(filtros ?? {});
+  if (!parsed.success) {
+    throw new PedidoServiceError(formatZodError(parsed.error));
+  }
+
+  const { estado_pedido, tipo_entrega } = parsed.data;
+  return {
+    estados: estado_pedido ? [estado_pedido] : ESTADOS_BLOQUEAN_DISPONIBILIDAD,
+    tipoEntrega: tipo_entrega,
+  };
+}
+
+/**
  * Vista diaria de entregas (S4-012): pedidos del tenant programados para una
- * fecha exacta, en los mismos estados ACTIVOS que S4-007 usa para
- * disponibilidad (`ESTADOS_BLOQUEAN_DISPONIBILIDAD`: cotización, confirmado,
- * en_preparación, listo_para_entregar). No reinterpreta esa regla ni agrega
- * filtros nuevos: la reutiliza tal cual. No filtra por tipo de entrega:
- * domicilio y recolección conviven en la misma vista operativa; solo se
- * distinguen visualmente en la UI.
+ * fecha exacta. Por defecto muestra los mismos estados ACTIVOS que S4-007 usa
+ * para disponibilidad (`ESTADOS_BLOQUEAN_DISPONIBILIDAD`) y ambos tipos de
+ * entrega.
+ *
+ * `filtros` (S4-014, opcional) permite acotar por `estado_pedido` (incluyendo
+ * `entregado`/`cancelado` para visualizarlos) y por `tipo_entrega`; ver
+ * `resolverFiltrosEntregas`. La regla de disponibilidad de S4-008 no se toca.
  *
  * `input` se valida con `fechaOperativaSchema` (día calendario estricto
  * "YYYY-MM-DD", medianoche UTC) como defensa en profundidad, aunque la página
@@ -528,16 +559,20 @@ export async function listPedidosService(
 export async function listPedidosDelDiaService(
   pasteleriaId: string,
   input: unknown,
+  filtros?: unknown,
 ): Promise<PedidoListItemDTO[]> {
   const parsed = fechaOperativaSchema.safeParse(input);
   if (!parsed.success) {
     throw new PedidoServiceError(formatZodError(parsed.error));
   }
 
+  const { estados, tipoEntrega } = resolverFiltrosEntregas(filtros);
+
   const pedidos = await findPedidosDelDia({
     pasteleriaId,
     fecha: parsed.data,
-    estados: ESTADOS_BLOQUEAN_DISPONIBILIDAD,
+    estados,
+    tipoEntrega,
   });
 
   return mapPedidosConResumenFinanciero(pasteleriaId, pedidos);
@@ -569,9 +604,12 @@ function toSemanaItemDTO(pedido: PedidoListPayload): PedidoSemanaItemDTO {
 
 /**
  * Vista semanal de entregas (S4-013): pedidos del tenant de lunes a domingo
- * agrupados por día, en los mismos estados ACTIVOS que la vista diaria de
- * S4-012 (`ESTADOS_BLOQUEAN_DISPONIBILIDAD`) — no reinterpreta esa regla ni
- * agrega filtros nuevos.
+ * agrupados por día. Por defecto usa los mismos estados ACTIVOS que la vista
+ * diaria de S4-012 (`ESTADOS_BLOQUEAN_DISPONIBILIDAD`) y ambos tipos de entrega.
+ *
+ * `filtros` (S4-014, opcional) aplica los MISMOS filtros que la vista diaria
+ * (`resolverFiltrosEntregas`): `estado_pedido` (incluidos `entregado`/`cancelado`)
+ * y `tipo_entrega`. No reinterpreta la regla de disponibilidad de S4-008.
  *
  * `input` es la fecha ANCLA (normalmente "YYYY-MM-DD" desde la URL) validada
  * con `fechaOperativaSchema`, la misma usada por la vista diaria; no necesita
@@ -590,12 +628,14 @@ function toSemanaItemDTO(pedido: PedidoListPayload): PedidoSemanaItemDTO {
 export async function listPedidosDeLaSemanaService(
   pasteleriaId: string,
   input: unknown,
+  filtros?: unknown,
 ): Promise<SemanaEntregasDTO> {
   const parsed = fechaOperativaSchema.safeParse(input);
   if (!parsed.success) {
     throw new PedidoServiceError(formatZodError(parsed.error));
   }
 
+  const { estados, tipoEntrega } = resolverFiltrosEntregas(filtros);
   const ancla = parsed.data;
   // getUTCDay(): 0 = domingo ... 6 = sábado. La semana operativa inicia en
   // lunes, así que domingo retrocede 6 días y el resto retrocede (día - 1).
@@ -612,7 +652,8 @@ export async function listPedidosDeLaSemanaService(
     pasteleriaId,
     desde: lunes,
     hasta: finExclusivo,
-    estados: ESTADOS_BLOQUEAN_DISPONIBILIDAD,
+    estados,
+    tipoEntrega,
   });
 
   const pedidosPorDia = new Map<string, PedidoSemanaItemDTO[]>();

@@ -153,6 +153,7 @@ export async function listPedidosAction(
  */
 export async function listPedidosDelDiaAction(
   fecha: unknown,
+  filtros?: unknown,
 ): Promise<ActionResult<PedidoListItemDTO[]>> {
   const contexto = await resolverContextoAdmin();
   if (!contexto.ok) {
@@ -160,7 +161,11 @@ export async function listPedidosDelDiaAction(
   }
 
   try {
-    const pedidos = await listPedidosDelDiaService(contexto.pasteleriaId, fecha);
+    const pedidos = await listPedidosDelDiaService(
+      contexto.pasteleriaId,
+      fecha,
+      filtros,
+    );
     return { ok: true, data: pedidos };
   } catch (error) {
     return { ok: false, error: toErrorMessage(error) };
@@ -177,6 +182,7 @@ export async function listPedidosDelDiaAction(
  */
 export async function listPedidosDeLaSemanaAction(
   fecha: unknown,
+  filtros?: unknown,
 ): Promise<ActionResult<SemanaEntregasDTO>> {
   const contexto = await resolverContextoAdmin();
   if (!contexto.ok) {
@@ -187,6 +193,7 @@ export async function listPedidosDeLaSemanaAction(
     const semana = await listPedidosDeLaSemanaService(
       contexto.pasteleriaId,
       fecha,
+      filtros,
     );
     return { ok: true, data: semana };
   } catch (error) {
