@@ -3,12 +3,14 @@ import type { z } from "zod";
 import type { Cliente } from "@/generated/prisma/client";
 import type { EstadoPedido, TipoEntrega } from "@/generated/prisma/enums";
 import type { EstadoPagoDerivado } from "@/modules/pagos/types";
+import type { ConflictoDisponibilidad } from "@/modules/pedidos/disponibilidad";
 import type {
   createPedidoSchema,
   updatePedidoSchema,
   listPedidosSchema,
   changeEstadoPedidoSchema,
   eliminarPedidoSchema,
+  verificarDisponibilidadSchema,
 } from "@/validation/pedidos";
 
 // Tipos de entrada inferidos desde los schemas de Zod (única fuente de verdad,
@@ -19,6 +21,9 @@ export type UpdatePedidoInput = z.infer<typeof updatePedidoSchema>;
 export type ListPedidosInput = z.infer<typeof listPedidosSchema>;
 export type ChangeEstadoPedidoInput = z.infer<typeof changeEstadoPedidoSchema>;
 export type EliminarPedidoInput = z.infer<typeof eliminarPedidoSchema>;
+export type VerificarDisponibilidadInput = z.infer<
+  typeof verificarDisponibilidadSchema
+>;
 
 /**
  * Resultado estándar y serializable de las Server Actions.
@@ -92,6 +97,56 @@ export type PedidoListItemDTO = PedidoBaseDTO & {
 export type PedidoDetalleDTO = PedidoBaseDTO & {
   cliente: Cliente;
   items: PedidoItemDTO[];
+};
+
+/**
+ * Elemento de un pedido dentro de la vista SEMANAL de entregas (S4-013).
+ * Deliberadamente más liviano que `PedidoListItemDTO`: no incluye dinero ni
+ * estado de pago (esa vista es de carga operativa, no financiera; ver
+ * `listPedidosDeLaSemanaService`), solo lo mínimo para el criterio de
+ * aceptación (hora, cliente, estado, tipo de entrega) y enlazar al detalle.
+ */
+export type PedidoSemanaItemDTO = {
+  id: string;
+  cliente: Pick<ClienteResumenDTO, "id" | "nombre">;
+  fecha_entrega: Date;
+  hora_entrega: string;
+  estado_pedido: EstadoPedido;
+  tipo_entrega: TipoEntrega;
+};
+
+// Un día calendario de la semana consultada, con sus pedidos ya en el mismo
+// orden que devuelve la consulta (fecha, hora, desempate estable). Siempre hay
+// 7 elementos en `SemanaEntregasDTO.dias`, aunque `pedidos` venga vacío.
+export type DiaSemanaEntregasDTO = {
+  fecha: string;
+  pedidos: PedidoSemanaItemDTO[];
+};
+
+/**
+ * Resultado de la vista semanal de entregas (S4-013): la semana (lunes a
+ * domingo) que contiene la fecha ancla recibida, con sus 7 días y los pedidos
+ * agrupados por día.
+ */
+export type SemanaEntregasDTO = {
+  lunes: string;
+  domingo: string;
+  dias: DiaSemanaEntregasDTO[];
+};
+
+/**
+ * Resultado de la consulta de disponibilidad de una entrega (S4-008). DTO plano
+ * y serializable a través del límite RSC.
+ *
+ *  - `disponible`: `true` si la entrega puede registrarse en ese horario.
+ *  - `motivo`: mensaje funcional en español cuando NO está disponible.
+ *  - `conflicto`: información mínima del pedido bloqueante (hora de inicio y fin
+ *    de su ventana) cuando aplica. Nunca expone datos sensibles del cliente.
+ */
+export type DisponibilidadEntregaDTO = {
+  disponible: boolean;
+  motivo?: string;
+  conflicto?: ConflictoDisponibilidad;
 };
 
 /**

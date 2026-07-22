@@ -12,16 +12,22 @@ import {
   createPedidoService,
   eliminarPedidoService,
   getPedidoByIdService,
+  listPedidosDelDiaService,
+  listPedidosDeLaSemanaService,
+  listPedidosProximosService,
   listPedidosService,
   obtenerResumenCancelacionPedidoService,
   updatePedidoService,
+  verificarDisponibilidadEntregaService,
 } from "@/server/services/pedidos.service";
 
 import type {
   ActionResult,
+  DisponibilidadEntregaDTO,
   PedidoDetalleDTO,
   PedidoListItemDTO,
   ResumenCancelacionPedidoDTO,
+  SemanaEntregasDTO,
 } from "./types";
 
 /**
@@ -139,6 +145,85 @@ export async function listPedidosAction(
   }
 }
 
+/**
+ * Vista diaria de entregas (S4-012): pedidos del tenant programados para una
+ * fecha exacta, en los estados activos de S4-007 (ver
+ * `listPedidosDelDiaService`). `fecha` es un valor `unknown` (normalmente
+ * "YYYY-MM-DD") que se valida en el service; el `pasteleriaId` se deriva
+ * SIEMPRE del contexto admin, nunca del input.
+ */
+export async function listPedidosDelDiaAction(
+  fecha: unknown,
+  filtros?: unknown,
+): Promise<ActionResult<PedidoListItemDTO[]>> {
+  const contexto = await resolverContextoAdmin();
+  if (!contexto.ok) {
+    return { ok: false, error: contexto.error };
+  }
+
+  try {
+    const pedidos = await listPedidosDelDiaService(
+      contexto.pasteleriaId,
+      fecha,
+      filtros,
+    );
+    return { ok: true, data: pedidos };
+  } catch (error) {
+    return { ok: false, error: toErrorMessage(error) };
+  }
+}
+
+/**
+ * Vista semanal de entregas (S4-013): pedidos del tenant de lunes a domingo,
+ * agrupados por día, en los mismos estados activos que la vista diaria (ver
+ * `listPedidosDeLaSemanaService`). `fecha` es la fecha ANCLA (`unknown`,
+ * normalmente "YYYY-MM-DD") que el service usa para calcular el lunes y el
+ * domingo de esa semana; el `pasteleriaId` se deriva SIEMPRE del contexto
+ * admin, nunca del input.
+ */
+export async function listPedidosDeLaSemanaAction(
+  fecha: unknown,
+  filtros?: unknown,
+): Promise<ActionResult<SemanaEntregasDTO>> {
+  const contexto = await resolverContextoAdmin();
+  if (!contexto.ok) {
+    return { ok: false, error: contexto.error };
+  }
+
+  try {
+    const semana = await listPedidosDeLaSemanaService(
+      contexto.pasteleriaId,
+      fecha,
+      filtros,
+    );
+    return { ok: true, data: semana };
+  } catch (error) {
+    return { ok: false, error: toErrorMessage(error) };
+  }
+}
+
+/**
+ * Agenda operativa resumida (S4-015): próximos pedidos del tenant, ordenados
+ * por fecha y hora de entrega. Sin parámetros de entrada: el horizonte y el
+ * límite están centralizados en `listPedidosProximosService`, no en la UI. El
+ * `pasteleriaId` se deriva SIEMPRE del contexto admin.
+ */
+export async function listPedidosProximosAction(): Promise<
+  ActionResult<PedidoListItemDTO[]>
+> {
+  const contexto = await resolverContextoAdmin();
+  if (!contexto.ok) {
+    return { ok: false, error: contexto.error };
+  }
+
+  try {
+    const pedidos = await listPedidosProximosService(contexto.pasteleriaId);
+    return { ok: true, data: pedidos };
+  } catch (error) {
+    return { ok: false, error: toErrorMessage(error) };
+  }
+}
+
 export async function getPedidoByIdAction(
   id: string,
 ): Promise<ActionResult<PedidoDetalleDTO>> {
@@ -188,6 +273,32 @@ export async function changeEstadoPedidoAction(
     );
     revalidatePedidoPaths(pedido.cliente_id, pedido.id);
     return { ok: true, data: pedido };
+  } catch (error) {
+    return { ok: false, error: toErrorMessage(error) };
+  }
+}
+
+/**
+ * Consulta la disponibilidad de una entrega (S4-008) sin crear ni editar nada.
+ * Pensada para uso futuro de la UI/calendario: dado `fecha_entrega`,
+ * `hora_entrega`, `tipo_entrega` (y opcionalmente `pedido_id` a excluir en
+ * edición), indica si el horario está libre según la ventana operativa de 30
+ * min. El `pasteleriaId` se deriva del contexto admin; nunca del input.
+ */
+export async function verificarDisponibilidadEntregaAction(
+  input: unknown,
+): Promise<ActionResult<DisponibilidadEntregaDTO>> {
+  const contexto = await resolverContextoAdmin();
+  if (!contexto.ok) {
+    return { ok: false, error: contexto.error };
+  }
+
+  try {
+    const disponibilidad = await verificarDisponibilidadEntregaService(
+      contexto.pasteleriaId,
+      input,
+    );
+    return { ok: true, data: disponibilidad };
   } catch (error) {
     return { ok: false, error: toErrorMessage(error) };
   }

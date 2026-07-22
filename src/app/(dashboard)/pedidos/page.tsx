@@ -5,13 +5,20 @@ import {
   getEstadoPagoBadgeClass,
   getEstadoPagoLabel,
 } from "@/modules/pagos/labels";
-import { listPedidosAction } from "@/modules/pedidos/actions";
+import {
+  listPedidosAction,
+  listPedidosProximosAction,
+} from "@/modules/pedidos/actions";
 import { formatHoraEntrega } from "@/modules/pedidos/formatters";
-import { getEstadoPedidoLabel } from "@/modules/pedidos/labels";
+import {
+  getEstadoPedidoLabel,
+  getTipoEntregaLabel,
+} from "@/modules/pedidos/labels";
 import { ESTADO_PEDIDO_VALUES } from "@/validation/pedidos";
 
 import { PedidoAccionesListado } from "./_components/pedido-acciones-listado";
 import { PedidosFiltros } from "./_components/pedidos-filtros";
+import { ProximosPedidos } from "./_components/proximos-pedidos";
 
 export const dynamic = "force-dynamic";
 
@@ -72,18 +79,25 @@ export default async function PedidosPage({ searchParams }: PedidosPageProps) {
   /**
    * Carga pedidos del tenant actual.
    * El aislamiento por pastelería ya lo aplica el backend/action.
+   *
+   * Las dos consultas son independientes (listado general vs. agenda
+   * resumida de S4-015) y se disparan en paralelo para no serializar dos
+   * viajes al servidor en una misma carga de página.
    */
-  const result = await listPedidosAction({
-    estado_pedido: estadoParam || undefined,
-    fecha_entrega_desde: fechaParam
-      ? new Date(`${fechaParam}T00:00:00.000Z`)
-      : undefined,
-    fecha_entrega_hasta: fechaParam
-      ? new Date(`${fechaParam}T00:00:00.000Z`)
-      : undefined,
-    take: 50,
-    skip: 0,
-  });
+  const [result, proximosResult] = await Promise.all([
+    listPedidosAction({
+      estado_pedido: estadoParam || undefined,
+      fecha_entrega_desde: fechaParam
+        ? new Date(`${fechaParam}T00:00:00.000Z`)
+        : undefined,
+      fecha_entrega_hasta: fechaParam
+        ? new Date(`${fechaParam}T00:00:00.000Z`)
+        : undefined,
+      take: 50,
+      skip: 0,
+    }),
+    listPedidosProximosAction(),
+  ]);
 
   const pedidos = result.ok ? result.data : [];
 
@@ -101,6 +115,14 @@ export default async function PedidosPage({ searchParams }: PedidosPageProps) {
           <Link href="/pedidos/nuevo">Nuevo pedido</Link>
         </Button>
       </div>
+
+      {proximosResult.ok ? (
+        <ProximosPedidos pedidos={proximosResult.data} />
+      ) : (
+        <div className="rounded-lg border border-destructive/30 bg-destructive/10 p-4 text-sm text-destructive">
+          {proximosResult.error}
+        </div>
+      )}
 
       <div className="rounded-lg border bg-background p-6 shadow-sm">
         <PedidosFiltros initialEstado={estadoParam} initialFecha={fechaParam} />
@@ -180,6 +202,11 @@ export default async function PedidosPage({ searchParams }: PedidosPageProps) {
 
                     <td className="px-4 py-3">
                       {formatHoraEntrega(pedido.hora_entrega)}
+                      {/* Tipo de entrega (S4-009): diferencia reparto (domicilio,
+                          sujeto a disponibilidad) de recolección en sucursal. */}
+                      <div className="text-xs text-muted-foreground">
+                        {getTipoEntregaLabel(pedido.tipo_entrega)}
+                      </div>
                     </td>
 
                     <td className="px-4 py-3">

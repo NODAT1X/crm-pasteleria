@@ -7,6 +7,7 @@ import {
   createPedidoAction,
   updatePedidoAction,
 } from "@/modules/pedidos/actions";
+import { useDisponibilidadEntrega } from "@/modules/pedidos/use-disponibilidad-entrega";
 
 import { ClienteAsociadoInfo } from "./cliente-asociado-info";
 import { ClienteSelectorField } from "./cliente-selector-field";
@@ -185,6 +186,21 @@ export function NuevoPedidoForm({
   const [notasInternas, setNotasInternas] = useState(
     initialData?.notas_internas ?? "",
   );
+
+  /**
+   * Disponibilidad de entrega (S4-011): se consulta automáticamente cuando
+   * el tipo es domicilio y hay fecha y hora capturadas. En edición se excluye
+   * el propio pedido (`pedidoId`) para evitar autoconflicto con su propio
+   * horario. Reutiliza `verificarDisponibilidadEntregaAction` (S4-008), que
+   * sigue siendo la única fuente de verdad; el backend vuelve a validar al
+   * guardar.
+   */
+  const disponibilidad = useDisponibilidadEntrega({
+    tipoEntrega,
+    fechaEntrega,
+    horaEntrega,
+    pedidoId: isEditMode ? pedidoId : undefined,
+  });
 
   /**
    * Items dinámicos.
@@ -399,6 +415,23 @@ export function NuevoPedidoForm({
       return;
     }
 
+    /**
+     * Bloqueo de envío por disponibilidad (S4-011): mientras se consulta o
+     * mientras exista un conflicto de horario vigente para una entrega a
+     * domicilio, no se llama al backend. Esto es una gate visual adicional;
+     * `createPedidoAction`/`updatePedidoAction` conservan la validación
+     * definitiva por si esta consulta visual quedó desactualizada.
+     */
+    if (tipoEntrega === "domicilio" && disponibilidad.bloqueaEnvio) {
+      setError(
+        disponibilidad.estado === "consultando"
+          ? "Espera a que termine de consultarse la disponibilidad antes de guardar."
+          : (disponibilidad.motivo ??
+              "El horario seleccionado no está disponible para entrega a domicilio."),
+      );
+      return;
+    }
+
     const payload = {
       fecha_entrega: fechaEntrega,
       hora_entrega: horaEntrega,
@@ -538,6 +571,9 @@ export function NuevoPedidoForm({
         onDireccionEntregaChange={setDireccionEntrega}
         notasInternas={notasInternas}
         onNotasInternasChange={setNotasInternas}
+        disponibilidadEstado={disponibilidad.estado}
+        disponibilidadMotivo={disponibilidad.motivo}
+        disponibilidadMensajeError={disponibilidad.mensajeError}
       />
 
       <PedidoItemsSection
@@ -554,6 +590,7 @@ export function NuevoPedidoForm({
         cancelHref={cancelHref}
         isEditMode={isEditMode}
         isSaving={isSaving}
+        disabled={tipoEntrega === "domicilio" && disponibilidad.bloqueaEnvio}
       />
     </form>
   );

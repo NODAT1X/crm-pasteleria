@@ -380,6 +380,84 @@ export const listPedidosSchema = z
     },
   );
 
+// --- Vista diaria de entregas (S4-012) ---------------------------------------
+
+// Formato estricto de día calendario "YYYY-MM-DD" (distinto de
+// `fechaEntregaRequerida`, que acepta cualquier string parseable): la vista
+// diaria navega por día operativo puro, sin hora.
+const FECHA_OPERATIVA_REGEX = /^(\d{4})-(\d{2})-(\d{2})$/;
+
+/**
+ * Parsea "YYYY-MM-DD" a `Date` (medianoche UTC) validando que sea un día de
+ * calendario REAL. `new Date(\`${value}T00:00:00.000Z\`)` no basta: JS
+ * normaliza fechas fuera de rango en vez de rechazarlas (p. ej.
+ * "2026-02-30" se reinterpreta silenciosamente como el 2 de marzo), así que
+ * aquí se reconstruyen los componentes UTC del resultado y se comparan contra
+ * los del input; solo se acepta si coinciden exactamente.
+ */
+function parseFechaOperativaEstricta(value: string): Date | null {
+  const match = FECHA_OPERATIVA_REGEX.exec(value);
+  if (!match) return null;
+
+  const year = Number(match[1]);
+  const month = Number(match[2]);
+  const day = Number(match[3]);
+
+  const fecha = new Date(Date.UTC(year, month - 1, day));
+
+  const esFechaReal =
+    fecha.getUTCFullYear() === year &&
+    fecha.getUTCMonth() === month - 1 &&
+    fecha.getUTCDate() === day;
+
+  return esFechaReal ? fecha : null;
+}
+
+/**
+ * Fecha operativa (día calendario) para la vista diaria de entregas (S4-012).
+ * Acepta únicamente "YYYY-MM-DD" y la normaliza a medianoche UTC — mismo
+ * criterio que `fecha_entrega` en el resto del módulo: el día se trata como un
+ * dato calendario puro, nunca como una hora local convertida a UTC. Rechaza
+ * fechas de calendario inexistentes (p. ej. "2026-02-30", "2026-13-01") y
+ * acepta correctamente años bisiestos (p. ej. "2028-02-29").
+ */
+export const fechaOperativaSchema = z.preprocess((value) => {
+  if (typeof value !== "string") return value;
+  const parsed = parseFechaOperativaEstricta(value.trim());
+  return parsed ?? value;
+}, z.date({
+  error: 'La fecha debe tener formato "YYYY-MM-DD" y ser una fecha de calendario válida.',
+}));
+
+/**
+ * Filtros OPCIONALES del calendario operativo (S4-014), aplicables tanto a la
+ * vista diaria como a la semanal. Ambos campos son opcionales:
+ *
+ *  - `estado_pedido` ausente => el service mantiene el comportamiento base de la
+ *    vista (solo estados activos). Si se especifica un estado (incluidos
+ *    `entregado` y `cancelado`), la vista muestra únicamente ese estado.
+ *  - `tipo_entrega` ausente => se muestran domicilio y recolección; si se
+ *    especifica, solo ese tipo.
+ *
+ * NO acepta `pasteleria_id` (el tenant se deriva del contexto admin) ni fecha
+ * (esa la valida `fechaOperativaSchema`). Un valor vacío se normaliza a
+ * `undefined` (sin filtro).
+ */
+export const entregasFiltrosSchema = z.strictObject({
+  estado_pedido: z.preprocess(
+    (value) =>
+      typeof value === "string" && value.trim() === "" ? undefined : value,
+    estadoPedidoValido.optional(),
+  ),
+  tipo_entrega: z.preprocess(
+    (value) =>
+      typeof value === "string" && value.trim() === "" ? undefined : value,
+    tipoEntregaValido.optional(),
+  ),
+});
+
+export type EntregasFiltrosInput = z.infer<typeof entregasFiltrosSchema>;
+
 // --- Identificador y cambio de estado ---------------------------------------
 
 // Identificador de pedido (cuid). Solo exigimos texto no vacío.
@@ -399,6 +477,37 @@ export const changeEstadoPedidoSchema = z.object({
   pedido_id: pedidoIdSchema,
   estado_pedido: estadoPedidoValido,
 });
+
+/**
+ * Schema para CONSULTAR disponibilidad de una entrega (S4-008). Valida la forma
+ * de entrada de la consulta de disponibilidad operativa por ventana de 30 min.
+ *
+ *  - `fecha_entrega` / `hora_entrega` / `tipo_entrega`: la propuesta a evaluar.
+ *  - `pedido_id` opcional: al editar, el pedido a EXCLUIR para no autoconflictuar.
+ *
+ * Es estricto (`strictObject`): rechaza cualquier campo no reconocido enviado
+ * desde el frontend (`pasteleria_id`, `total`, `saldo`, `estado`, ...). El tenant
+ * se deriva SIEMPRE del contexto admin y la regla de bloqueo se resuelve en
+ * backend; nunca se acepta un estado calculado desde la UI.
+ */
+export const verificarDisponibilidadSchema = z.strictObject(
+  {
+    fecha_entrega: fechaEntregaRequerida,
+    hora_entrega: horaEntregaRequerida,
+    tipo_entrega: tipoEntregaValido,
+    pedido_id: z.preprocess(
+      (value) =>
+        typeof value === "string" && value.trim() === "" ? undefined : value,
+      pedidoIdSchema.optional(),
+    ),
+  },
+  {
+    error: (issue) =>
+      issue.code === "unrecognized_keys"
+        ? `Se recibieron campos no permitidos: ${issue.keys.join(", ")}.`
+        : undefined,
+  },
+);
 
 /**
  * Schema para CANCELAR un pedido con retención/devolución (S3-019). Solo acepta
@@ -529,6 +638,9 @@ export type CreatePedidoInput = z.infer<typeof createPedidoSchema>;
 export type UpdatePedidoInput = z.infer<typeof updatePedidoSchema>;
 export type ListPedidosInput = z.infer<typeof listPedidosSchema>;
 export type ChangeEstadoPedidoInput = z.infer<typeof changeEstadoPedidoSchema>;
+export type VerificarDisponibilidadInput = z.infer<
+  typeof verificarDisponibilidadSchema
+>;
 export type CancelarPedidoInput = z.infer<typeof cancelarPedidoSchema>;
 export type EliminarPedidoInput = z.infer<typeof eliminarPedidoSchema>;
 export type PedidoIdInput = z.infer<typeof pedidoIdSchema>;

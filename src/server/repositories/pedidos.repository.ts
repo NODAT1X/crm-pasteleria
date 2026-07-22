@@ -1,5 +1,6 @@
 import { Prisma } from "@/generated/prisma/client";
-import type { EstadoPedido, TipoEntrega } from "@/generated/prisma/enums";
+import { TipoEntrega } from "@/generated/prisma/enums";
+import type { EstadoPedido } from "@/generated/prisma/enums";
 import { prisma } from "@/server/db/prisma";
 
 /**
@@ -231,6 +232,188 @@ export async function findPedidoEstado(params: {
   return db.pedido.findFirst({
     where: { id, pasteleria_id: pasteleriaId },
     select: { id: true, estado_pedido: true },
+  });
+}
+
+// Estado + datos de entrega actuales de un pedido del tenant. Se usa en la
+// edición (S4-008) para calcular el tipo/fecha/hora EFECTIVOS tras un patch
+// parcial y validar la disponibilidad con esos valores. `null` si no existe o
+// es de otro tenant.
+export async function findPedidoEntrega(params: {
+  pasteleriaId: string;
+  id: string;
+}): Promise<{
+  id: string;
+  estado_pedido: EstadoPedido;
+  tipo_entrega: TipoEntrega;
+  fecha_entrega: Date;
+  hora_entrega: string;
+} | null> {
+  const { pasteleriaId, id } = params;
+
+  return prisma.pedido.findFirst({
+    where: { id, pasteleria_id: pasteleriaId },
+    select: {
+      id: true,
+      estado_pedido: true,
+      tipo_entrega: true,
+      fecha_entrega: true,
+      hora_entrega: true,
+    },
+  });
+}
+
+// --- Disponibilidad de entregas a domicilio (S4-008) ------------------------
+
+// Límites [inicio, fin) del día UTC de una fecha de entrega. Las fechas se
+// persisten como medianoche UTC (el input es una fecha sin hora), así que el
+// rango cubre todo el día sin depender de la zona horaria del servidor.
+function rangoDelDiaUTC(fecha: Date): { gte: Date; lt: Date } {
+  const inicio = new Date(
+    Date.UTC(fecha.getUTCFullYear(), fecha.getUTCMonth(), fecha.getUTCDate()),
+  );
+  const fin = new Date(inicio);
+  fin.setUTCDate(fin.getUTCDate() + 1);
+  return { gte: inicio, lt: fin };
+}
+
+/**
+ * Entregas a DOMICILIO que bloquean disponibilidad en una fecha (S4-008).
+ *
+ * Filtra SIEMPRE por:
+ *  - `pasteleria_id` (barrera multi-tenant: nunca cruza pastelerías);
+ *  - `tipo_entrega = domicilio` (las recolecciones no consumen ventana);
+ *  - `estado_pedido ∈ estados` (estados activos que pasa el servicio);
+ *  - `fecha_entrega` dentro del día indicado.
+ *
+ * `excludePedidoId` excluye el propio pedido en edición para que no se
+ * autoconflictúe. Los pedidos eliminados (hard delete de S4-005) ya no existen
+ * en la tabla, por lo que quedan excluidos de forma natural. Devuelve solo el
+ * `id` y la `hora_entrega` (no trae datos de más); la aritmética de la ventana
+ * de 30 min vive en `@/modules/pedidos/disponibilidad`.
+ */
+export async function findBloqueosDomicilioPorFecha(params: {
+  pasteleriaId: string;
+  fecha_entrega: Date;
+  estados: readonly EstadoPedido[];
+  excludePedidoId?: string;
+}): Promise<{ id: string; hora_entrega: string }[]> {
+  const { pasteleriaId, fecha_entrega, estados, excludePedidoId } = params;
+  const { gte, lt } = rangoDelDiaUTC(fecha_entrega);
+
+  const where: Prisma.PedidoWhereInput = {
+    pasteleria_id: pasteleriaId,
+    tipo_entrega: TipoEntrega.domicilio,
+    estado_pedido: { in: [...estados] },
+    fecha_entrega: { gte, lt },
+  };
+
+  if (excludePedidoId) {
+    where.id = { not: excludePedidoId };
+  }
+
+  return prisma.pedido.findMany({
+    where,
+    select: { id: true, hora_entrega: true },
+    orderBy: [{ hora_entrega: "asc" }, { id: "asc" }],
+  });
+}
+
+// --- Vista diaria de entregas (S4-012) ---------------------------------------
+
+/**
+ * Pedidos programados para una fecha exacta del tenant (S4-012), en los
+ * estados que el llamador indique (el service pasa los mismos estados activos
+ * de S4-007, `ESTADOS_BLOQUEAN_DISPONIBILIDAD`; este repositorio no decide esa
+ * regla, solo filtra por lo que recibe).
+ *
+ * Reutiliza `rangoDelDiaUTC` (S4-008) para acotar el día completo y
+ * `listInclude` (mismo shape que el listado general) para no duplicar el
+ * include. Los pedidos eliminados (hard delete de S4-005) ya no existen en la
+ * tabla, así que quedan excluidos de forma natural, sin filtro adicional.
+ *
+ * Orden: hora de entrega ascendente y, para empates, un desempate determinista
+ * (`created_at` asc, `id` asc) para que el orden no dependa de cómo Postgres
+ * resuelva el empate entre corridas.
+ */
+export async function findPedidosDelDia(params: {
+  pasteleriaId: string;
+  fecha: Date;
+  estados: readonly EstadoPedido[];
+  tipoEntrega?: TipoEntrega;
+}): Promise<PedidoListPayload[]> {
+  const { pasteleriaId, fecha, estados, tipoEntrega } = params;
+  const { gte, lt } = rangoDelDiaUTC(fecha);
+
+  return prisma.pedido.findMany({
+    where: {
+      pasteleria_id: pasteleriaId,
+      estado_pedido: { in: [...estados] },
+      fecha_entrega: { gte, lt },
+      // Filtro opcional por tipo de entrega (S4-014); si es undefined, no se
+      // agrega y conviven domicilio y recolección.
+      ...(tipoEntrega ? { tipo_entrega: tipoEntrega } : {}),
+    },
+    include: listInclude,
+    orderBy: [
+      { hora_entrega: "asc" },
+      { created_at: "asc" },
+      { id: "asc" },
+    ],
+  });
+}
+
+// --- Vista semanal de entregas (S4-013) --------------------------------------
+
+/**
+ * Pedidos del tenant con `fecha_entrega` dentro de un rango [desde, hasta)
+ * arbitrario, en los estados que indique el llamador (el service pasa los
+ * mismos estados activos de S4-007/S4-012, `ESTADOS_BLOQUEAN_DISPONIBILIDAD`;
+ * este repositorio no decide esa regla).
+ *
+ * UNA sola consulta por rango para toda la semana (lunes a domingo), en vez de
+ * siete consultas por día: el service calcula `desde` (lunes) / `hasta`
+ * (lunes siguiente, exclusivo) y aquí solo se filtra. Los pedidos eliminados
+ * (hard delete de S4-005) ya no existen en la tabla, así que quedan excluidos
+ * de forma natural.
+ *
+ * Orden: `fecha_entrega` asc (agrupable por día en el service), `hora_entrega`
+ * asc dentro del día y el mismo desempate determinista que la vista diaria
+ * (`created_at` asc, `id` asc).
+ *
+ * `take` (opcional) acota el número de renglones devueltos SIN una consulta
+ * aparte: como el orden ya deja primero las entregas más próximas, un
+ * `LIMIT` en la misma consulta basta para la agenda resumida de "próximos
+ * pedidos" (S4-015) sin traer de más. Si se omite, se comporta igual que
+ * antes (todo el rango, usado por la vista semanal de S4-013).
+ */
+export async function findPedidosPorRango(params: {
+  pasteleriaId: string;
+  desde: Date;
+  hasta: Date;
+  estados: readonly EstadoPedido[];
+  tipoEntrega?: TipoEntrega;
+  take?: number;
+}): Promise<PedidoListPayload[]> {
+  const { pasteleriaId, desde, hasta, estados, tipoEntrega, take } = params;
+
+  return prisma.pedido.findMany({
+    where: {
+      pasteleria_id: pasteleriaId,
+      estado_pedido: { in: [...estados] },
+      fecha_entrega: { gte: desde, lt: hasta },
+      // Filtro opcional por tipo de entrega (S4-014); si es undefined, no se
+      // agrega y conviven domicilio y recolección.
+      ...(tipoEntrega ? { tipo_entrega: tipoEntrega } : {}),
+    },
+    include: listInclude,
+    orderBy: [
+      { fecha_entrega: "asc" },
+      { hora_entrega: "asc" },
+      { created_at: "asc" },
+      { id: "asc" },
+    ],
+    ...(take !== undefined ? { take } : {}),
   });
 }
 

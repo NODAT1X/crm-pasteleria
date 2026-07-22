@@ -3,7 +3,14 @@ import { z } from "zod";
 import { Prisma } from "@/generated/prisma/client";
 import type { Cliente } from "@/generated/prisma/client";
 import type { MovimientoFinanciero } from "@/generated/prisma/client";
-import { EstadoPedido, TipoMovimientoPago } from "@/generated/prisma/enums";
+import { EstadoPedido, TipoEntrega, TipoMovimientoPago } from "@/generated/prisma/enums";
+import {
+  ESTADOS_BLOQUEAN_DISPONIBILIDAD,
+  detectarConflictoDomicilio,
+  mensajeConflictoDisponibilidad,
+  type ConflictoDisponibilidad,
+} from "@/modules/pedidos/disponibilidad";
+import { hoyFechaOperativaLocal } from "@/modules/pedidos/fecha-operativa";
 import { findClienteById } from "@/server/repositories/clientes.repository";
 import {
   countMovimientosByPedidoIds,
@@ -16,8 +23,12 @@ import {
 import {
   createPedidoWithItems,
   deletePedidoConMovimientos,
+  findBloqueosDomicilioPorFecha,
   findPedidoDetalle,
+  findPedidoEntrega,
   findPedidoEstado,
+  findPedidosDelDia,
+  findPedidosPorRango,
   listPedidos,
   updateEstadoPedido,
   updatePedidoWithItems,
@@ -40,18 +51,25 @@ import {
   changeEstadoPedidoSchema,
   createPedidoSchema,
   eliminarPedidoSchema,
+  entregasFiltrosSchema,
+  fechaOperativaSchema,
   listPedidosSchema,
   pedidoIdSchema,
   updatePedidoSchema,
   validateEstadoPedidoTransition,
+  verificarDisponibilidadSchema,
   type PedidoItemInput,
 } from "@/validation/pedidos";
 
 import type {
+  DiaSemanaEntregasDTO,
+  DisponibilidadEntregaDTO,
   PedidoDetalleDTO,
   PedidoItemDTO,
   PedidoListItemDTO,
+  PedidoSemanaItemDTO,
   ResumenCancelacionPedidoDTO,
+  SemanaEntregasDTO,
 } from "@/modules/pedidos/types";
 
 /**
@@ -276,6 +294,129 @@ function toDetalleDTO(pedido: PedidoDetallePayload): PedidoDetalleDTO {
   };
 }
 
+// --- Disponibilidad de entregas a domicilio (S4-008) ------------------------
+
+/**
+ * Resultado interno de evaluar la disponibilidad de una entrega a domicilio.
+ * Reutilizable por creación, edición y por la consulta explícita.
+ */
+type ResultadoDisponibilidadDomicilio =
+  | { disponible: true }
+  | { disponible: false; motivo: string; conflicto: ConflictoDisponibilidad };
+
+/**
+ * Evalúa si una entrega a DOMICILIO puede registrarse en `fecha_entrega` +
+ * `hora_entrega` sin caer dentro de la ventana operativa de 30 min de otra
+ * entrega a domicilio ACTIVA del mismo tenant y día.
+ *
+ * Barrera multi-tenant: el `pasteleriaId` llega del contexto admin y se propaga
+ * a la consulta; nunca sale del input de negocio. `excludePedidoId` se usa en
+ * edición para no autoconflictuar el pedido consigo mismo. Solo aplica a
+ * domicilio: recolección se resuelve como disponible antes de llamar aquí.
+ */
+async function evaluarDisponibilidadDomicilio(params: {
+  pasteleriaId: string;
+  fecha_entrega: Date;
+  hora_entrega: string;
+  excludePedidoId?: string;
+}): Promise<ResultadoDisponibilidadDomicilio> {
+  const { pasteleriaId, fecha_entrega, hora_entrega, excludePedidoId } = params;
+
+  const bloqueos = await findBloqueosDomicilioPorFecha({
+    pasteleriaId,
+    fecha_entrega,
+    estados: ESTADOS_BLOQUEAN_DISPONIBILIDAD,
+    excludePedidoId,
+  });
+
+  const conflicto = detectarConflictoDomicilio(
+    hora_entrega,
+    bloqueos.map((bloqueo) => ({
+      pedido_id: bloqueo.id,
+      hora_entrega: bloqueo.hora_entrega,
+    })),
+  );
+
+  if (!conflicto) {
+    return { disponible: true };
+  }
+
+  return {
+    disponible: false,
+    motivo: mensajeConflictoDisponibilidad(conflicto),
+    conflicto,
+  };
+}
+
+/**
+ * Regla S4-008 aplicada en creación/edición: si la entrega es a domicilio y su
+ * horario cae dentro de la ventana ocupada de otra entrega a domicilio activa,
+ * rechaza con un error de dominio controlado (mensaje funcional en español).
+ * Para recolección no consulta nada: nunca bloquea disponibilidad.
+ */
+async function assertDisponibilidadEntrega(params: {
+  pasteleriaId: string;
+  tipo_entrega: TipoEntrega;
+  fecha_entrega: Date;
+  hora_entrega: string;
+  excludePedidoId?: string;
+}): Promise<void> {
+  if (params.tipo_entrega !== TipoEntrega.domicilio) {
+    return;
+  }
+
+  const disponibilidad = await evaluarDisponibilidadDomicilio({
+    pasteleriaId: params.pasteleriaId,
+    fecha_entrega: params.fecha_entrega,
+    hora_entrega: params.hora_entrega,
+    excludePedidoId: params.excludePedidoId,
+  });
+
+  if (!disponibilidad.disponible) {
+    throw new PedidoServiceError(disponibilidad.motivo);
+  }
+}
+
+/**
+ * Consulta explícita de disponibilidad (S4-008), pensada para uso futuro de la
+ * UI/calendario. Valida la forma de entrada con Zod y devuelve un DTO sencillo.
+ * Recolección siempre disponible; domicilio se evalúa contra la ventana de 30
+ * min. `pedido_id` opcional excluye el propio pedido al editar.
+ */
+export async function verificarDisponibilidadEntregaService(
+  pasteleriaId: string,
+  input: unknown,
+): Promise<DisponibilidadEntregaDTO> {
+  const parsed = verificarDisponibilidadSchema.safeParse(input);
+  if (!parsed.success) {
+    throw new PedidoServiceError(formatZodError(parsed.error));
+  }
+
+  const { fecha_entrega, hora_entrega, tipo_entrega, pedido_id } = parsed.data;
+
+  // Recolección en sucursal no consume ventana operativa (doc S4-007 §12).
+  if (tipo_entrega !== TipoEntrega.domicilio) {
+    return { disponible: true };
+  }
+
+  const disponibilidad = await evaluarDisponibilidadDomicilio({
+    pasteleriaId,
+    fecha_entrega,
+    hora_entrega,
+    excludePedidoId: pedido_id,
+  });
+
+  if (disponibilidad.disponible) {
+    return { disponible: true };
+  }
+
+  return {
+    disponible: false,
+    motivo: disponibilidad.motivo,
+    conflicto: disponibilidad.conflicto,
+  };
+}
+
 // --- Casos de uso -----------------------------------------------------------
 
 export async function createPedidoService(
@@ -289,6 +430,17 @@ export async function createPedidoService(
 
   // Regla: el cliente debe existir, ser del tenant y estar activo.
   await assertClienteAsignable(pasteleriaId, parsed.data.cliente_id);
+
+  // Regla S4-008: una entrega a domicilio no puede caer dentro de la ventana
+  // operativa de 30 min de otra entrega a domicilio activa del mismo día/tenant.
+  // Recolección no bloquea disponibilidad. Se valida ANTES de crear: no se
+  // persiste un pedido inválido.
+  await assertDisponibilidadEntrega({
+    pasteleriaId,
+    tipo_entrega: parsed.data.tipo_entrega,
+    fecha_entrega: parsed.data.fecha_entrega,
+    hora_entrega: parsed.data.hora_entrega,
+  });
 
   // El backend calcula subtotales y total; el schema no acepta total del input.
   const { items, total } = calcularItemsYTotal(parsed.data.items);
@@ -310,24 +462,22 @@ export async function createPedidoService(
   return toDetalleDTO(pedido);
 }
 
-export async function listPedidosService(
+/**
+ * Resumen financiero batch (evita N+1) de una lista de pedidos ya consultada,
+ * mapeada al DTO de listado. Reutilizado por `listPedidosService` y por
+ * `listPedidosDelDiaService` (S4-012) para no duplicar las mismas dos queries
+ * ni el cálculo de total pagado / saldo / estado de pago.
+ *
+ *  - `movimientos` (solo aplicados): total pagado / saldo / estado de pago.
+ *  - `cantidadPorPedido` (aplicados + anulados, S4-005): decide si el
+ *    listado debe ofrecer confirmación simple o fuerte al eliminar.
+ */
+async function mapPedidosConResumenFinanciero(
   pasteleriaId: string,
-  params: unknown,
+  pedidos: PedidoListPayload[],
 ): Promise<PedidoListItemDTO[]> {
-  // `params ?? {}` permite llamar sin argumentos y usar los valores por defecto.
-  const parsed = listPedidosSchema.safeParse(params ?? {});
-  if (!parsed.success) {
-    throw new PedidoServiceError(formatZodError(parsed.error));
-  }
-
-  const pedidos = await listPedidos({ pasteleriaId, filters: parsed.data });
   const pedidoIds = pedidos.map((pedido) => pedido.id);
 
-  // Resumen financiero del listado en consultas batch adicionales (evita N+1:
-  // sin importar cuántos pedidos haya, siempre son 3 queries en total).
-  //  - `movimientos` (solo aplicados): total pagado / saldo / estado de pago.
-  //  - `cantidadPorPedido` (aplicados + anulados, S4-005): decide si el
-  //    listado debe ofrecer confirmación simple o fuerte al eliminar.
   const [movimientos, cantidadPorPedido] = await Promise.all([
     findMovimientosAplicadosByPedidoIds({ pasteleriaId, pedidoIds }),
     countMovimientosByPedidoIds({ pasteleriaId, pedidoIds }),
@@ -347,6 +497,238 @@ export async function listPedidosService(
       cantidadPorPedido.get(pedido.id) ?? 0,
     ),
   );
+}
+
+export async function listPedidosService(
+  pasteleriaId: string,
+  params: unknown,
+): Promise<PedidoListItemDTO[]> {
+  // `params ?? {}` permite llamar sin argumentos y usar los valores por defecto.
+  const parsed = listPedidosSchema.safeParse(params ?? {});
+  if (!parsed.success) {
+    throw new PedidoServiceError(formatZodError(parsed.error));
+  }
+
+  const pedidos = await listPedidos({ pasteleriaId, filters: parsed.data });
+
+  return mapPedidosConResumenFinanciero(pasteleriaId, pedidos);
+}
+
+/**
+ * Resuelve los filtros OPCIONALES del calendario (S4-014), compartidos por la
+ * vista diaria y la semanal. Valida la forma con `entregasFiltrosSchema` (nunca
+ * confía en el input crudo; jamás acepta `pasteleria_id`).
+ *
+ *  - Sin `estado_pedido`: se mantiene el comportamiento BASE de la vista (solo
+ *    estados activos de S4-007, `ESTADOS_BLOQUEAN_DISPONIBILIDAD`). Con un estado
+ *    específico (incluidos `entregado`/`cancelado`), la vista muestra solo ese.
+ *  - `tipo_entrega` ausente: ambos tipos; presente: solo ese tipo.
+ *
+ * No modifica la regla de disponibilidad ni los estados bloqueantes de S4-008:
+ * `ESTADOS_BLOQUEAN_DISPONIBILIDAD` se reutiliza tal cual como default de la vista.
+ */
+function resolverFiltrosEntregas(filtros: unknown): {
+  estados: readonly EstadoPedido[];
+  tipoEntrega?: TipoEntrega;
+} {
+  const parsed = entregasFiltrosSchema.safeParse(filtros ?? {});
+  if (!parsed.success) {
+    throw new PedidoServiceError(formatZodError(parsed.error));
+  }
+
+  const { estado_pedido, tipo_entrega } = parsed.data;
+  return {
+    estados: estado_pedido ? [estado_pedido] : ESTADOS_BLOQUEAN_DISPONIBILIDAD,
+    tipoEntrega: tipo_entrega,
+  };
+}
+
+/**
+ * Vista diaria de entregas (S4-012): pedidos del tenant programados para una
+ * fecha exacta. Por defecto muestra los mismos estados ACTIVOS que S4-007 usa
+ * para disponibilidad (`ESTADOS_BLOQUEAN_DISPONIBILIDAD`) y ambos tipos de
+ * entrega.
+ *
+ * `filtros` (S4-014, opcional) permite acotar por `estado_pedido` (incluyendo
+ * `entregado`/`cancelado` para visualizarlos) y por `tipo_entrega`; ver
+ * `resolverFiltrosEntregas`. La regla de disponibilidad de S4-008 no se toca.
+ *
+ * `input` se valida con `fechaOperativaSchema` (día calendario estricto
+ * "YYYY-MM-DD", medianoche UTC) como defensa en profundidad, aunque la página
+ * ya haya saneado la fecha antes de llamar a la action.
+ */
+export async function listPedidosDelDiaService(
+  pasteleriaId: string,
+  input: unknown,
+  filtros?: unknown,
+): Promise<PedidoListItemDTO[]> {
+  const parsed = fechaOperativaSchema.safeParse(input);
+  if (!parsed.success) {
+    throw new PedidoServiceError(formatZodError(parsed.error));
+  }
+
+  const { estados, tipoEntrega } = resolverFiltrosEntregas(filtros);
+
+  const pedidos = await findPedidosDelDia({
+    pasteleriaId,
+    fecha: parsed.data,
+    estados,
+    tipoEntrega,
+  });
+
+  return mapPedidosConResumenFinanciero(pasteleriaId, pedidos);
+}
+
+// --- Vista semanal de entregas (S4-013) --------------------------------------
+
+// Día calendario (UTC) de `fecha` como "YYYY-MM-DD". `fecha_entrega` se
+// persiste siempre a medianoche UTC (mismo criterio que `fechaOperativaSchema`
+// / `rangoDelDiaUTC`), así que leer los componentes UTC reconstruye el día
+// exacto sin importar la zona horaria del proceso.
+function fechaUTCComoOperativa(fecha: Date): string {
+  const year = fecha.getUTCFullYear();
+  const month = String(fecha.getUTCMonth() + 1).padStart(2, "0");
+  const day = String(fecha.getUTCDate()).padStart(2, "0");
+  return `${year}-${month}-${day}`;
+}
+
+function toSemanaItemDTO(pedido: PedidoListPayload): PedidoSemanaItemDTO {
+  return {
+    id: pedido.id,
+    cliente: { id: pedido.cliente.id, nombre: pedido.cliente.nombre },
+    fecha_entrega: pedido.fecha_entrega,
+    hora_entrega: pedido.hora_entrega,
+    estado_pedido: pedido.estado_pedido,
+    tipo_entrega: pedido.tipo_entrega,
+  };
+}
+
+/**
+ * Vista semanal de entregas (S4-013): pedidos del tenant de lunes a domingo
+ * agrupados por día. Por defecto usa los mismos estados ACTIVOS que la vista
+ * diaria de S4-012 (`ESTADOS_BLOQUEAN_DISPONIBILIDAD`) y ambos tipos de entrega.
+ *
+ * `filtros` (S4-014, opcional) aplica los MISMOS filtros que la vista diaria
+ * (`resolverFiltrosEntregas`): `estado_pedido` (incluidos `entregado`/`cancelado`)
+ * y `tipo_entrega`. No reinterpreta la regla de disponibilidad de S4-008.
+ *
+ * `input` es la fecha ANCLA (normalmente "YYYY-MM-DD" desde la URL) validada
+ * con `fechaOperativaSchema`, la misma usada por la vista diaria; no necesita
+ * ser lunes. A partir de esa fecha (ya un `Date` a medianoche UTC) se calcula
+ * el lunes de esa semana con aritmética pura en UTC (`getUTCDay` +
+ * `setUTCDate`, mismo criterio que `rangoDelDiaUTC` / `sumarDiasFechaOperativa`
+ * — nunca la zona horaria del proceso), y de ahí el domingo (lunes + 6) y el
+ * límite exclusivo para la consulta (lunes + 7).
+ *
+ * Solo hace UNA consulta por rango (`findPedidosPorRango`) para las 7 fechas,
+ * nunca 7 consultas independientes. Deliberadamente NO reutiliza
+ * `mapPedidosConResumenFinanciero`: la vista semanal es de carga operativa
+ * (hora, cliente, estado, tipo de entrega), no financiera, así que evita las
+ * dos consultas adicionales de movimientos que sí necesita el listado general.
+ */
+export async function listPedidosDeLaSemanaService(
+  pasteleriaId: string,
+  input: unknown,
+  filtros?: unknown,
+): Promise<SemanaEntregasDTO> {
+  const parsed = fechaOperativaSchema.safeParse(input);
+  if (!parsed.success) {
+    throw new PedidoServiceError(formatZodError(parsed.error));
+  }
+
+  const { estados, tipoEntrega } = resolverFiltrosEntregas(filtros);
+  const ancla = parsed.data;
+  // getUTCDay(): 0 = domingo ... 6 = sábado. La semana operativa inicia en
+  // lunes, así que domingo retrocede 6 días y el resto retrocede (día - 1).
+  const diaSemana = ancla.getUTCDay();
+  const offsetALunes = diaSemana === 0 ? -6 : 1 - diaSemana;
+
+  const lunes = new Date(ancla);
+  lunes.setUTCDate(lunes.getUTCDate() + offsetALunes);
+
+  const finExclusivo = new Date(lunes);
+  finExclusivo.setUTCDate(finExclusivo.getUTCDate() + 7);
+
+  const pedidos = await findPedidosPorRango({
+    pasteleriaId,
+    desde: lunes,
+    hasta: finExclusivo,
+    estados,
+    tipoEntrega,
+  });
+
+  const pedidosPorDia = new Map<string, PedidoSemanaItemDTO[]>();
+  for (const pedido of pedidos) {
+    const fecha = fechaUTCComoOperativa(pedido.fecha_entrega);
+    const lista = pedidosPorDia.get(fecha) ?? [];
+    lista.push(toSemanaItemDTO(pedido));
+    pedidosPorDia.set(fecha, lista);
+  }
+
+  const dias: DiaSemanaEntregasDTO[] = Array.from({ length: 7 }, (_, i) => {
+    const fechaDia = new Date(lunes);
+    fechaDia.setUTCDate(fechaDia.getUTCDate() + i);
+    const fecha = fechaUTCComoOperativa(fechaDia);
+    return { fecha, pedidos: pedidosPorDia.get(fecha) ?? [] };
+  });
+
+  return {
+    lunes: dias[0].fecha,
+    domingo: dias[6].fecha,
+    dias,
+  };
+}
+
+// --- Agenda operativa resumida: próximos pedidos (S4-015) --------------------
+
+/**
+ * Horizonte y límite de la agenda resumida de "próximos pedidos" (S4-015),
+ * centralizados aquí para no dispersar números mágicos: sin una convención
+ * previa más específica en el repositorio, se usa la ventana y el tope que
+ * pide la issue.
+ */
+const PROXIMOS_PEDIDOS_HORIZONTE_DIAS = 7;
+const PROXIMOS_PEDIDOS_LIMITE = 10;
+
+/**
+ * Agenda operativa resumida (S4-015): próximos pedidos del tenant, listos
+ * para escanear sin entrar al calendario. Reutiliza exactamente las piezas de
+ * las vistas de entregas en vez de reimplementar reglas:
+ *
+ *  - Día operativo actual con `hoyFechaOperativaLocal()` (America/Mexico_City,
+ *    S4-012), nunca la zona del proceso que ejecuta el código.
+ *  - Mismos estados ACTIVOS que bloquean disponibilidad (S4-007/S4-012,
+ *    `ESTADOS_BLOQUEAN_DISPONIBILIDAD`); ambos tipos de entrega.
+ *  - UNA sola consulta acotada por rango + `take` (`findPedidosPorRango`,
+ *    S4-013), nunca una consulta por día: `desde` es la medianoche UTC del día
+ *    operativo actual (mismo criterio que `fechaOperativaSchema`/
+ *    `fechaUTCComoOperativa`) y `hasta` es `desde` +
+ *    `PROXIMOS_PEDIDOS_HORIZONTE_DIAS` días (exclusivo), acotada además a los
+ *    `PROXIMOS_PEDIDOS_LIMITE` renglones más próximos por el orden ya aplicado
+ *    en el repositorio (fecha, hora, `created_at`, `id`).
+ *  - Saldo pendiente vía `mapPedidosConResumenFinanciero` (S4-012): dos
+ *    consultas EN BATCH para todo el lote, nunca una por pedido.
+ *
+ * Los pedidos eliminados (hard delete de S4-005) ya no existen en la tabla,
+ * así que quedan excluidos de forma natural, sin filtro adicional.
+ */
+export async function listPedidosProximosService(
+  pasteleriaId: string,
+): Promise<PedidoListItemDTO[]> {
+  const hoy = hoyFechaOperativaLocal();
+  const desde = new Date(`${hoy}T00:00:00.000Z`);
+  const hasta = new Date(desde);
+  hasta.setUTCDate(hasta.getUTCDate() + PROXIMOS_PEDIDOS_HORIZONTE_DIAS);
+
+  const pedidos = await findPedidosPorRango({
+    pasteleriaId,
+    desde,
+    hasta,
+    estados: ESTADOS_BLOQUEAN_DISPONIBILIDAD,
+    take: PROXIMOS_PEDIDOS_LIMITE,
+  });
+
+  return mapPedidosConResumenFinanciero(pasteleriaId, pedidos);
 }
 
 export async function getPedidoByIdService(
@@ -387,8 +769,9 @@ export async function updatePedidoService(
 
   // Regla S2-009 / S3-019: los pedidos en estado final (entregado o cancelado)
   // no se pueden editar. Este guard protege la Server Action ante llamadas
-  // directas, aunque la UI ya oculte el acceso a la edición.
-  const actual = await findPedidoEstado({ pasteleriaId, id: parsedId.data });
+  // directas, aunque la UI ya oculte el acceso a la edición. Se lee además el
+  // tipo/fecha/hora ACTUALES para poder calcular la entrega efectiva (S4-008).
+  const actual = await findPedidoEntrega({ pasteleriaId, id: parsedId.data });
 
   if (!actual) {
     throw new PedidoServiceError(
@@ -409,6 +792,18 @@ export async function updatePedidoService(
   if (data.cliente_id !== undefined) {
     await assertClienteAsignable(pasteleriaId, data.cliente_id);
   }
+
+  // Regla S4-008: si tras el patch parcial el pedido QUEDA a domicilio, valida
+  // disponibilidad con el tipo/fecha/hora EFECTIVOS (los que no se envían se
+  // conservan del pedido actual) y excluyéndose a sí mismo para no
+  // autoconflictuar. Si el resultado es recolección, no se bloquea nada.
+  await assertDisponibilidadEntrega({
+    pasteleriaId,
+    tipo_entrega: data.tipo_entrega ?? actual.tipo_entrega,
+    fecha_entrega: data.fecha_entrega ?? actual.fecha_entrega,
+    hora_entrega: data.hora_entrega ?? actual.hora_entrega,
+    excludePedidoId: parsedId.data,
+  });
 
   // Copiar solo los campos escalares presentes (undefined = "no tocar"). El
   // estado NO se cambia aquí (eso es exclusivo de changeEstadoPedidoService).

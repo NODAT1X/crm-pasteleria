@@ -1,5 +1,10 @@
-import { TIPO_ENTREGA_OPTIONS } from "@/modules/pedidos/labels";
+import {
+  TIPO_ENTREGA_OPTIONS,
+  getTipoEntregaAyudaDisponibilidad,
+} from "@/modules/pedidos/labels";
+import type { DisponibilidadEntregaEstado } from "@/modules/pedidos/use-disponibilidad-entrega";
 
+import { DisponibilidadEntregaStatus } from "./disponibilidad-entrega-status";
 import type { TipoEntrega } from "./nuevo-pedido-form";
 
 type EntregaFieldsProps = {
@@ -15,6 +20,9 @@ type EntregaFieldsProps = {
   onDireccionEntregaChange: (value: string) => void;
   notasInternas: string;
   onNotasInternasChange: (value: string) => void;
+  disponibilidadEstado: DisponibilidadEntregaEstado;
+  disponibilidadMotivo?: string;
+  disponibilidadMensajeError?: string;
 };
 
 /**
@@ -34,6 +42,9 @@ export function EntregaFields({
   onDireccionEntregaChange,
   notasInternas,
   onNotasInternasChange,
+  disponibilidadEstado,
+  disponibilidadMotivo,
+  disponibilidadMensajeError,
 }: EntregaFieldsProps) {
   return (
     <div className="grid gap-4 md:grid-cols-2">
@@ -89,6 +100,34 @@ export function EntregaFields({
             </option>
           ))}
         </select>
+
+        {/*
+         * Ayuda diferenciada de disponibilidad (S4-009): deja claro que solo el
+         * domicilio ocupa ventana de reparto; la recolección puede compartir
+         * horario. No valida nada en el cliente: la regla la aplica el backend
+         * (S4-008) al guardar y su error se muestra arriba del formulario.
+         */}
+        <p
+          className={
+            tipoEntrega === "domicilio"
+              ? "rounded-lg border border-amber-200 bg-amber-50 p-3 text-xs text-amber-800"
+              : "rounded-lg border bg-muted/40 p-3 text-xs text-muted-foreground"
+          }
+        >
+          {getTipoEntregaAyudaDisponibilidad(tipoEntrega)}
+        </p>
+
+        {/*
+         * Resultado visual de disponibilidad (S4-011): refleja la consulta a
+         * `verificarDisponibilidadEntregaAction` (S4-008) sin reinterpretar la
+         * ventana de 30 minutos en el cliente. El backend sigue validando de
+         * forma definitiva al guardar.
+         */}
+        <DisponibilidadEntregaStatus
+          estado={disponibilidadEstado}
+          motivo={disponibilidadMotivo}
+          mensajeError={disponibilidadMensajeError}
+        />
       </div>
 
       {tipoEntrega === "domicilio" ? (
