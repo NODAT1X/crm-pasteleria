@@ -10,6 +10,7 @@ import {
   mensajeConflictoDisponibilidad,
   type ConflictoDisponibilidad,
 } from "@/modules/pedidos/disponibilidad";
+import { hoyFechaOperativaLocal } from "@/modules/pedidos/fecha-operativa";
 import { findClienteById } from "@/server/repositories/clientes.repository";
 import {
   countMovimientosByPedidoIds,
@@ -676,6 +677,58 @@ export async function listPedidosDeLaSemanaService(
     domingo: dias[6].fecha,
     dias,
   };
+}
+
+// --- Agenda operativa resumida: próximos pedidos (S4-015) --------------------
+
+/**
+ * Horizonte y límite de la agenda resumida de "próximos pedidos" (S4-015),
+ * centralizados aquí para no dispersar números mágicos: sin una convención
+ * previa más específica en el repositorio, se usa la ventana y el tope que
+ * pide la issue.
+ */
+const PROXIMOS_PEDIDOS_HORIZONTE_DIAS = 7;
+const PROXIMOS_PEDIDOS_LIMITE = 10;
+
+/**
+ * Agenda operativa resumida (S4-015): próximos pedidos del tenant, listos
+ * para escanear sin entrar al calendario. Reutiliza exactamente las piezas de
+ * las vistas de entregas en vez de reimplementar reglas:
+ *
+ *  - Día operativo actual con `hoyFechaOperativaLocal()` (America/Mexico_City,
+ *    S4-012), nunca la zona del proceso que ejecuta el código.
+ *  - Mismos estados ACTIVOS que bloquean disponibilidad (S4-007/S4-012,
+ *    `ESTADOS_BLOQUEAN_DISPONIBILIDAD`); ambos tipos de entrega.
+ *  - UNA sola consulta acotada por rango + `take` (`findPedidosPorRango`,
+ *    S4-013), nunca una consulta por día: `desde` es la medianoche UTC del día
+ *    operativo actual (mismo criterio que `fechaOperativaSchema`/
+ *    `fechaUTCComoOperativa`) y `hasta` es `desde` +
+ *    `PROXIMOS_PEDIDOS_HORIZONTE_DIAS` días (exclusivo), acotada además a los
+ *    `PROXIMOS_PEDIDOS_LIMITE` renglones más próximos por el orden ya aplicado
+ *    en el repositorio (fecha, hora, `created_at`, `id`).
+ *  - Saldo pendiente vía `mapPedidosConResumenFinanciero` (S4-012): dos
+ *    consultas EN BATCH para todo el lote, nunca una por pedido.
+ *
+ * Los pedidos eliminados (hard delete de S4-005) ya no existen en la tabla,
+ * así que quedan excluidos de forma natural, sin filtro adicional.
+ */
+export async function listPedidosProximosService(
+  pasteleriaId: string,
+): Promise<PedidoListItemDTO[]> {
+  const hoy = hoyFechaOperativaLocal();
+  const desde = new Date(`${hoy}T00:00:00.000Z`);
+  const hasta = new Date(desde);
+  hasta.setUTCDate(hasta.getUTCDate() + PROXIMOS_PEDIDOS_HORIZONTE_DIAS);
+
+  const pedidos = await findPedidosPorRango({
+    pasteleriaId,
+    desde,
+    hasta,
+    estados: ESTADOS_BLOQUEAN_DISPONIBILIDAD,
+    take: PROXIMOS_PEDIDOS_LIMITE,
+  });
+
+  return mapPedidosConResumenFinanciero(pasteleriaId, pedidos);
 }
 
 export async function getPedidoByIdService(
