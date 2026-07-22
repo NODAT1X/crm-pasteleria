@@ -14,6 +14,7 @@ import {
   getPedidoByIdService,
   listPedidosDelDiaService,
   listPedidosDeLaSemanaService,
+  listPedidosProximosService,
   listPedidosService,
   obtenerResumenCancelacionPedidoService,
   updatePedidoService,
@@ -196,6 +197,28 @@ export async function listPedidosDeLaSemanaAction(
       filtros,
     );
     return { ok: true, data: semana };
+  } catch (error) {
+    return { ok: false, error: toErrorMessage(error) };
+  }
+}
+
+/**
+ * Agenda operativa resumida (S4-015): próximos pedidos del tenant, ordenados
+ * por fecha y hora de entrega. Sin parámetros de entrada: el horizonte y el
+ * límite están centralizados en `listPedidosProximosService`, no en la UI. El
+ * `pasteleriaId` se deriva SIEMPRE del contexto admin.
+ */
+export async function listPedidosProximosAction(): Promise<
+  ActionResult<PedidoListItemDTO[]>
+> {
+  const contexto = await resolverContextoAdmin();
+  if (!contexto.ok) {
+    return { ok: false, error: contexto.error };
+  }
+
+  try {
+    const pedidos = await listPedidosProximosService(contexto.pasteleriaId);
+    return { ok: true, data: pedidos };
   } catch (error) {
     return { ok: false, error: toErrorMessage(error) };
   }

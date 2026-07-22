@@ -380,6 +380,12 @@ export async function findPedidosDelDia(params: {
  * Orden: `fecha_entrega` asc (agrupable por día en el service), `hora_entrega`
  * asc dentro del día y el mismo desempate determinista que la vista diaria
  * (`created_at` asc, `id` asc).
+ *
+ * `take` (opcional) acota el número de renglones devueltos SIN una consulta
+ * aparte: como el orden ya deja primero las entregas más próximas, un
+ * `LIMIT` en la misma consulta basta para la agenda resumida de "próximos
+ * pedidos" (S4-015) sin traer de más. Si se omite, se comporta igual que
+ * antes (todo el rango, usado por la vista semanal de S4-013).
  */
 export async function findPedidosPorRango(params: {
   pasteleriaId: string;
@@ -387,8 +393,9 @@ export async function findPedidosPorRango(params: {
   hasta: Date;
   estados: readonly EstadoPedido[];
   tipoEntrega?: TipoEntrega;
+  take?: number;
 }): Promise<PedidoListPayload[]> {
-  const { pasteleriaId, desde, hasta, estados, tipoEntrega } = params;
+  const { pasteleriaId, desde, hasta, estados, tipoEntrega, take } = params;
 
   return prisma.pedido.findMany({
     where: {
@@ -406,6 +413,7 @@ export async function findPedidosPorRango(params: {
       { created_at: "asc" },
       { id: "asc" },
     ],
+    ...(take !== undefined ? { take } : {}),
   });
 }
 
