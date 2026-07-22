@@ -137,6 +137,7 @@ export function ProximosPedidos({ pedidos }: ProximosPedidosProps) {
                   <li key={pedido.id}>
                     <Link
                       href={`/pedidos/${pedido.id}`}
+                      aria-label={`Abrir detalle del pedido de ${pedido.cliente.nombre}`}
                       className="flex h-full flex-col gap-2 rounded-lg border bg-background p-4 text-sm shadow-sm transition-colors hover:bg-muted/40"
                     >
                       <div className="flex flex-wrap items-center justify-between gap-2">
@@ -170,6 +171,9 @@ export function ProximosPedidos({ pedidos }: ProximosPedidosProps) {
                           </span>
                         ) : null}
                       </div>
+                      <span className="text-xs font-medium text-primary">
+                        Abrir detalle
+                      </span>
                     </Link>
                   </li>
                 ))}

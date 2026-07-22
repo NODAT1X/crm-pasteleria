@@ -130,6 +130,7 @@ export default async function EntregasPage({
             <li key={pedido.id}>
               <Link
                 href={`/pedidos/${pedido.id}`}
+                aria-label={`Abrir detalle del pedido de ${pedido.cliente.nombre}`}
                 className="flex flex-col gap-3 rounded-lg border bg-background p-4 shadow-sm transition-colors hover:bg-muted/40 sm:flex-row sm:items-center sm:justify-between"
               >
                 <div className="flex flex-col gap-1 sm:flex-row sm:items-center sm:gap-4">
@@ -163,6 +164,9 @@ export default async function EntregasPage({
                       {formatMoney(pedido.saldo_pendiente)} pendiente
                     </span>
                   ) : null}
+                  <span className="text-xs font-medium text-primary">
+                    Abrir detalle
+                  </span>
                 </div>
               </Link>
             </li>
