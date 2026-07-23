@@ -266,6 +266,25 @@ Algunas herramientas de Node.js (npm, o el propio Next.js) pueden advertir sobre
 
 Recomendación si aparece: verificar que los comandos se ejecuten desde la raíz del repositorio (`crm-pasteleria`) y revisar si existe algún lockfile externo en carpetas superiores. Cualquier lockfile externo debe revisarse antes de modificarlo o eliminarlo; esta guía no indica eliminar archivos automáticamente.
 
+#### Revisión S4-021: verificación puntual del warning de múltiples `package-lock.json`
+
+La issue S4-021 revisó específicamente el warning de Next.js/Turbopack relacionado con la detección de múltiples archivos `package-lock.json` en el entorno local.
+
+Resultado de la verificación:
+
+- El warning **no se reprodujo** en el build actual.
+- `npm run build` **terminó correctamente**.
+- Dentro del repositorio **solo existe un `package-lock.json`**, ubicado en la raíz del proyecto.
+- Se confirmó con `git ls-files`, donde únicamente aparecen `package.json` y `package-lock.json` como archivos de paquete versionados.
+- También se confirmó con `find . -name package-lock.json`, que solo encontró `./package-lock.json` dentro del repositorio.
+- Se detectaron otros archivos `package-lock.json` en proyectos hermanos ubicados fuera del repositorio, dentro de una carpeta padre del entorno local. Esos archivos **no forman parte de `crm-pasteleria`**.
+- **No se debe eliminar el `package-lock.json` del proyecto**: es el lockfile principal del repositorio y debe permanecer versionado.
+- Si el warning aparece en otro equipo, se debe revisar si existe un `package-lock.json` en una carpeta padre o si el proyecto se está ejecutando desde una ubicación incorrecta.
+- Mientras `npm run build` termine correctamente y dentro del repositorio solo exista el lockfile principal, el warning se considera una advertencia local **no bloqueante**.
+- La corrección, si aplica localmente, consiste en ordenar la carpeta de trabajo o eliminar únicamente lockfiles accidentales fuera del repositorio. Nunca debe eliminarse el `package-lock.json` principal del proyecto.
+
+**Veredicto:** warning no reproducible en el build actual. No se encontró problema dentro del repositorio. Se documenta como advertencia local no bloqueante en caso de aparecer en otros entornos.
+
 ### Problemas particulares de una computadora
 
 Cualquier otro error de instalación, permisos, antivirus, red o configuración específica de un equipo queda fuera del alcance de esta guía y debe resolverse de forma individual.
