@@ -21,6 +21,7 @@ import {
   runMovimientosFinancierosTransaction,
 } from "@/server/repositories/movimientos-financieros.repository";
 import {
+  adquirirLockDisponibilidad,
   createPedidoWithItems,
   deletePedidoConMovimientos,
   findBloqueosDomicilioPorFecha,
@@ -30,6 +31,7 @@ import {
   findPedidosDelDia,
   findPedidosPorRango,
   listPedidos,
+  runPedidoTransaction,
   updateEstadoPedido,
   updatePedidoWithItems,
   type PedidoDetallePayload,
@@ -319,14 +321,17 @@ async function evaluarDisponibilidadDomicilio(params: {
   fecha_entrega: Date;
   hora_entrega: string;
   excludePedidoId?: string;
+  db?: Prisma.TransactionClient;
 }): Promise<ResultadoDisponibilidadDomicilio> {
-  const { pasteleriaId, fecha_entrega, hora_entrega, excludePedidoId } = params;
+  const { pasteleriaId, fecha_entrega, hora_entrega, excludePedidoId, db } =
+    params;
 
   const bloqueos = await findBloqueosDomicilioPorFecha({
     pasteleriaId,
     fecha_entrega,
     estados: ESTADOS_BLOQUEAN_DISPONIBILIDAD,
     excludePedidoId,
+    db,
   });
 
   const conflicto = detectarConflictoDomicilio(
@@ -360,6 +365,7 @@ async function assertDisponibilidadEntrega(params: {
   fecha_entrega: Date;
   hora_entrega: string;
   excludePedidoId?: string;
+  db?: Prisma.TransactionClient;
 }): Promise<void> {
   if (params.tipo_entrega !== TipoEntrega.domicilio) {
     return;
@@ -370,11 +376,37 @@ async function assertDisponibilidadEntrega(params: {
     fecha_entrega: params.fecha_entrega,
     hora_entrega: params.hora_entrega,
     excludePedidoId: params.excludePedidoId,
+    db: params.db,
   });
 
   if (!disponibilidad.disponible) {
     throw new PedidoServiceError(disponibilidad.motivo);
   }
+}
+
+/**
+ * Ejecuta `fn` dentro de una transacción que primero adquiere un advisory lock
+ * transaccional por `(pasteleriaId, día de entrega)` (S5-004). Cierra la carrera
+ * read-then-write de disponibilidad: mientras la transacción viva, ninguna otra
+ * escritura de entrega a domicilio del MISMO tenant y día puede leer la ventana
+ * ni escribir. El lock se libera solo al COMMIT/ROLLBACK. Los fallos de
+ * infraestructura (no poder abrir la transacción, espera del pool) se traducen a
+ * un `PedidoServiceError` con mensaje funcional (S4-002/S4-003).
+ *
+ * Solo se usa para entregas a domicilio: la recolección no consume disponibilidad
+ * de reparto y sigue escribiéndose sin lock, conservando el horario compartido.
+ */
+function conLockDisponibilidad<T>(
+  pasteleriaId: string,
+  fecha_entrega: Date,
+  fn: (tx: Prisma.TransactionClient) => Promise<T>,
+): Promise<T> {
+  return conErroresDeInfraestructuraControlados(() =>
+    runPedidoTransaction(async (tx) => {
+      await adquirirLockDisponibilidad({ pasteleriaId, fecha_entrega, db: tx });
+      return fn(tx);
+    }),
+  );
 }
 
 /**
@@ -431,33 +463,46 @@ export async function createPedidoService(
   // Regla: el cliente debe existir, ser del tenant y estar activo.
   await assertClienteAsignable(pasteleriaId, parsed.data.cliente_id);
 
-  // Regla S4-008: una entrega a domicilio no puede caer dentro de la ventana
-  // operativa de 30 min de otra entrega a domicilio activa del mismo día/tenant.
-  // Recolección no bloquea disponibilidad. Se valida ANTES de crear: no se
-  // persiste un pedido inválido.
-  await assertDisponibilidadEntrega({
-    pasteleriaId,
-    tipo_entrega: parsed.data.tipo_entrega,
-    fecha_entrega: parsed.data.fecha_entrega,
-    hora_entrega: parsed.data.hora_entrega,
-  });
-
   // El backend calcula subtotales y total; el schema no acepta total del input.
   const { items, total } = calcularItemsYTotal(parsed.data.items);
 
-  const pedido = await createPedidoWithItems({
+  const persistData = {
+    cliente_id: parsed.data.cliente_id,
+    fecha_entrega: parsed.data.fecha_entrega,
+    hora_entrega: parsed.data.hora_entrega,
+    tipo_entrega: parsed.data.tipo_entrega,
+    direccion_entrega: parsed.data.direccion_entrega,
+    notas_internas: parsed.data.notas_internas,
+    total,
+    items,
+  };
+
+  // Recolección en sucursal no consume disponibilidad de reparto: se crea sin
+  // lock, conservando el horario compartido (comportamiento S4-009).
+  if (parsed.data.tipo_entrega !== TipoEntrega.domicilio) {
+    const pedido = await createPedidoWithItems({ pasteleriaId, data: persistData });
+    return toDetalleDTO(pedido);
+  }
+
+  // Domicilio (S4-008 + S5-004): la validación de la ventana de 30 min y la
+  // inserción ocurren dentro de UNA transacción que primero adquiere el advisory
+  // lock por (tenant, día). Así dos creaciones concurrentes de domicilio en la
+  // misma ventana se resuelven en un solo éxito y un rechazo, en vez de colarse
+  // ambas por leer la ventana libre antes de que la otra escriba.
+  const pedido = await conLockDisponibilidad(
     pasteleriaId,
-    data: {
-      cliente_id: parsed.data.cliente_id,
-      fecha_entrega: parsed.data.fecha_entrega,
-      hora_entrega: parsed.data.hora_entrega,
-      tipo_entrega: parsed.data.tipo_entrega,
-      direccion_entrega: parsed.data.direccion_entrega,
-      notas_internas: parsed.data.notas_internas,
-      total,
-      items,
+    parsed.data.fecha_entrega,
+    async (tx) => {
+      await assertDisponibilidadEntrega({
+        pasteleriaId,
+        tipo_entrega: parsed.data.tipo_entrega,
+        fecha_entrega: parsed.data.fecha_entrega,
+        hora_entrega: parsed.data.hora_entrega,
+        db: tx,
+      });
+      return createPedidoWithItems({ pasteleriaId, data: persistData, db: tx });
     },
-  });
+  );
 
   return toDetalleDTO(pedido);
 }
@@ -793,17 +838,12 @@ export async function updatePedidoService(
     await assertClienteAsignable(pasteleriaId, data.cliente_id);
   }
 
-  // Regla S4-008: si tras el patch parcial el pedido QUEDA a domicilio, valida
-  // disponibilidad con el tipo/fecha/hora EFECTIVOS (los que no se envían se
-  // conservan del pedido actual) y excluyéndose a sí mismo para no
-  // autoconflictuar. Si el resultado es recolección, no se bloquea nada.
-  await assertDisponibilidadEntrega({
-    pasteleriaId,
-    tipo_entrega: data.tipo_entrega ?? actual.tipo_entrega,
-    fecha_entrega: data.fecha_entrega ?? actual.fecha_entrega,
-    hora_entrega: data.hora_entrega ?? actual.hora_entrega,
-    excludePedidoId: parsedId.data,
-  });
+  // Tipo/fecha/hora EFECTIVOS tras el patch parcial (los que no se envían se
+  // conservan del pedido actual). La disponibilidad se valida más abajo, dentro
+  // de la transacción con lock, solo si el pedido QUEDA a domicilio (S5-004).
+  const tipoEfectivo = data.tipo_entrega ?? actual.tipo_entrega;
+  const fechaEfectiva = data.fecha_entrega ?? actual.fecha_entrega;
+  const horaEfectiva = data.hora_entrega ?? actual.hora_entrega;
 
   // Copiar solo los campos escalares presentes (undefined = "no tocar"). El
   // estado NO se cambia aquí (eso es exclusivo de changeEstadoPedidoService).
@@ -850,12 +890,36 @@ export async function updatePedidoService(
     }
   }
 
-  const pedido = await updatePedidoWithItems({
-    pasteleriaId,
-    id: parsedId.data,
-    data: scalarData,
-    items,
-  });
+  const escribir = (tx?: Prisma.TransactionClient) =>
+    updatePedidoWithItems({
+      pasteleriaId,
+      id: parsedId.data,
+      data: scalarData,
+      items,
+      db: tx,
+    });
+
+  let pedido: PedidoDetallePayload | null;
+  if (tipoEfectivo === TipoEntrega.domicilio) {
+    // Domicilio (S4-008 + S5-004): validar la ventana de 30 min y escribir dentro
+    // de UNA transacción que primero adquiere el advisory lock por (tenant, día),
+    // excluyendo el propio pedido. Cierra la carrera read-then-write al editar
+    // hacia una ventana ocupada; el mensaje de conflicto sigue siendo el mismo.
+    pedido = await conLockDisponibilidad(pasteleriaId, fechaEfectiva, async (tx) => {
+      await assertDisponibilidadEntrega({
+        pasteleriaId,
+        tipo_entrega: tipoEfectivo,
+        fecha_entrega: fechaEfectiva,
+        hora_entrega: horaEfectiva,
+        excludePedidoId: parsedId.data,
+        db: tx,
+      });
+      return escribir(tx);
+    });
+  } else {
+    // Recolección: no consume disponibilidad de reparto; se escribe sin lock.
+    pedido = await escribir();
+  }
 
   if (!pedido) {
     throw new PedidoServiceError(
