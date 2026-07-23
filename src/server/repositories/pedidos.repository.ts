@@ -1,6 +1,7 @@
 import { Prisma } from "@/generated/prisma/client";
 import { TipoEntrega } from "@/generated/prisma/enums";
 import type { EstadoPedido } from "@/generated/prisma/enums";
+import { lockKeyDisponibilidad } from "@/modules/pedidos/lock-disponibilidad";
 import { prisma } from "@/server/db/prisma";
 
 /**
@@ -92,6 +93,66 @@ export type ListPedidosFilters = {
   skip: number;
 };
 
+// --- Transacción y advisory lock de disponibilidad (S5-004) ------------------
+
+// Mismos presupuestos que la transacción de movimientos: los defaults de Prisma
+// (`maxWait` 2 s / `timeout` 5 s) asumen una BD local, pero contra el pooler
+// remoto de Supabase abrir la transacción puede tardar más. El cuerpo es corto
+// (lock + 1 lectura + 1 escritura), así que el `timeout` es un tope de seguridad.
+const PEDIDO_TRANSACTION_MAX_WAIT_MS = 10_000;
+const PEDIDO_TRANSACTION_TIMEOUT_MS = 15_000;
+
+/**
+ * Ejecuta `fn` dentro de `prisma.$transaction` con los presupuestos del entorno.
+ * Se usa para envolver, de forma atómica, la adquisición del advisory lock de
+ * disponibilidad, la lectura de bloqueos y la escritura del pedido (S5-004).
+ */
+export function runPedidoTransaction<T>(
+  fn: (tx: Prisma.TransactionClient) => Promise<T>,
+  options?: { isolationLevel?: Prisma.TransactionIsolationLevel },
+): Promise<T> {
+  return prisma.$transaction(fn, {
+    maxWait: PEDIDO_TRANSACTION_MAX_WAIT_MS,
+    timeout: PEDIDO_TRANSACTION_TIMEOUT_MS,
+    ...options,
+  });
+}
+
+// Día operativo "YYYY-MM-DD" (UTC) de una fecha de entrega, para derivar la clave
+// del lock. `fecha_entrega` se persiste a medianoche UTC (mismo criterio que
+// `rangoDelDiaUTC`), así que los componentes UTC reconstruyen el día exacto.
+function fechaOperativaUTC(fecha: Date): string {
+  const year = fecha.getUTCFullYear();
+  const month = String(fecha.getUTCMonth() + 1).padStart(2, "0");
+  const day = String(fecha.getUTCDate()).padStart(2, "0");
+  return `${year}-${month}-${day}`;
+}
+
+/**
+ * Adquiere un advisory lock TRANSACCIONAL por `(pasteleriaId, día de entrega)`
+ * (S5-004). Debe ejecutarse al inicio de la transacción que luego valida
+ * disponibilidad y escribe el pedido: serializa únicamente las escrituras de
+ * entrega a domicilio del mismo tenant y día, y se libera automáticamente al
+ * cerrar la transacción (COMMIT o ROLLBACK).
+ *
+ * La clave viene de `lockKeyDisponibilidad` (backend confiable, nunca del
+ * frontend). El SQL está PARAMETRIZADO por Prisma (`$1`, `$2`); no se concatenan
+ * valores. El cast `::int4` fuerza la sobrecarga `pg_advisory_xact_lock(int, int)`.
+ */
+export async function adquirirLockDisponibilidad(params: {
+  pasteleriaId: string;
+  fecha_entrega: Date;
+  db: Prisma.TransactionClient;
+}): Promise<void> {
+  const { pasteleriaId, fecha_entrega, db } = params;
+  const { key1, key2 } = lockKeyDisponibilidad(
+    pasteleriaId,
+    fechaOperativaUTC(fecha_entrega),
+  );
+
+  await db.$queryRaw`SELECT pg_advisory_xact_lock(${key1}::int4, ${key2}::int4)`;
+}
+
 // --- Crear pedido -----------------------------------------------------------
 
 /**
@@ -99,14 +160,19 @@ export type ListPedidosFilters = {
  * (`items.create`) es ATÓMICA: el pedido y todos sus renglones se insertan en
  * una sola transacción, evitando estados parciales. `estado_pedido` se omite a
  * propósito para usar el default de Prisma (`cotizacion`).
+ *
+ * Acepta un `db` opcional (cliente de transacción) para ejecutarse DENTRO de la
+ * transacción que sostiene el advisory lock de disponibilidad (S5-004), de modo
+ * que la validación de la ventana y la inserción sean atómicas.
  */
 export async function createPedidoWithItems(params: {
   pasteleriaId: string;
   data: CreatePedidoData;
+  db?: Prisma.TransactionClient;
 }): Promise<PedidoDetallePayload> {
-  const { pasteleriaId, data } = params;
+  const { pasteleriaId, data, db = prisma } = params;
 
-  return prisma.pedido.create({
+  return db.pedido.create({
     data: {
       // Tenant SIEMPRE desde el contexto admin, nunca desde el input.
       pasteleria_id: pasteleriaId,
@@ -297,8 +363,10 @@ export async function findBloqueosDomicilioPorFecha(params: {
   fecha_entrega: Date;
   estados: readonly EstadoPedido[];
   excludePedidoId?: string;
+  db?: Prisma.TransactionClient;
 }): Promise<{ id: string; hora_entrega: string }[]> {
-  const { pasteleriaId, fecha_entrega, estados, excludePedidoId } = params;
+  const { pasteleriaId, fecha_entrega, estados, excludePedidoId, db = prisma } =
+    params;
   const { gte, lt } = rangoDelDiaUTC(fecha_entrega);
 
   const where: Prisma.PedidoWhereInput = {
@@ -312,7 +380,7 @@ export async function findBloqueosDomicilioPorFecha(params: {
     where.id = { not: excludePedidoId };
   }
 
-  return prisma.pedido.findMany({
+  return db.pedido.findMany({
     where,
     select: { id: true, hora_entrega: true },
     orderBy: [{ hora_entrega: "asc" }, { id: "asc" }],
@@ -430,54 +498,72 @@ export async function updatePedidoWithItems(params: {
   id: string;
   data: UpdatePedidoScalarData;
   items?: PedidoItemPersistData[];
+  db?: Prisma.TransactionClient;
 }): Promise<PedidoDetallePayload | null> {
+  const { db, ...rest } = params;
+
+  // Con `db` (S5-004): corre dentro de la transacción que ya sostiene el advisory
+  // lock de disponibilidad, sin abrir una anidada. Sin `db`: abre su propia
+  // transacción para conservar la atomicidad del reemplazo de items.
+  return db
+    ? ejecutarUpdatePedidoWithItems(db, rest)
+    : prisma.$transaction((tx) => ejecutarUpdatePedidoWithItems(tx, rest));
+}
+
+async function ejecutarUpdatePedidoWithItems(
+  tx: Prisma.TransactionClient,
+  params: {
+    pasteleriaId: string;
+    id: string;
+    data: UpdatePedidoScalarData;
+    items?: PedidoItemPersistData[];
+  },
+): Promise<PedidoDetallePayload | null> {
   const { pasteleriaId, id, data, items } = params;
 
-  return prisma.$transaction(async (tx) => {
-    // 1. Confirmar existencia dentro del tenant (barrera multi-tenant).
-    const existing = await tx.pedido.findFirst({
-      where: { id, pasteleria_id: pasteleriaId },
-      select: { id: true },
-    });
-    if (!existing) {
-      return null;
-    }
-
-    // 2. Actualizar solo los campos escalares presentes. Prisma refresca
-    //    `updated_at` aunque `data` venga vacío (p. ej. si solo cambian items).
-    const updateResult = await tx.pedido.updateMany({
+  // 1. Confirmar existencia dentro del tenant (barrera multi-tenant).
+  const existing = await tx.pedido.findFirst({
     where: { id, pasteleria_id: pasteleriaId },
-    data,
-    });
-
-    if (updateResult.count === 0) {
+    select: { id: true },
+  });
+  if (!existing) {
     return null;
   }
 
-    // 3. Reemplazo de items (solo si vienen en la petición).
-    if (items) {
-      await tx.pedidoItem.deleteMany({
-        where: { pedido_id: id, pasteleria_id: pasteleriaId },
-      });
-      await tx.pedidoItem.createMany({
-        data: items.map((item) => ({
-          pasteleria_id: pasteleriaId,
-          pedido_id: id,
-          producto_id: item.producto_id,
-          nombre_snapshot: item.nombre_snapshot,
-          descripcion: item.descripcion,
-          cantidad: item.cantidad,
-          precio_unitario: item.precio_unitario,
-          subtotal: item.subtotal,
-        })),
-      });
-    }
+  // 2. Actualizar solo los campos escalares presentes. Prisma refresca
+  //    `updated_at` aunque `data` venga vacío (p. ej. si solo cambian items).
+  const updateResult = await tx.pedido.updateMany({
+    where: { id, pasteleria_id: pasteleriaId },
+    data,
+  });
 
-    // 4. Releer el detalle actualizado dentro de la misma transacción.
-    return tx.pedido.findFirst({
-      where: { id, pasteleria_id: pasteleriaId },
-      include: detalleInclude,
+  if (updateResult.count === 0) {
+    return null;
+  }
+
+  // 3. Reemplazo de items (solo si vienen en la petición).
+  if (items) {
+    await tx.pedidoItem.deleteMany({
+      where: { pedido_id: id, pasteleria_id: pasteleriaId },
     });
+    await tx.pedidoItem.createMany({
+      data: items.map((item) => ({
+        pasteleria_id: pasteleriaId,
+        pedido_id: id,
+        producto_id: item.producto_id,
+        nombre_snapshot: item.nombre_snapshot,
+        descripcion: item.descripcion,
+        cantidad: item.cantidad,
+        precio_unitario: item.precio_unitario,
+        subtotal: item.subtotal,
+      })),
+    });
+  }
+
+  // 4. Releer el detalle actualizado dentro de la misma transacción.
+  return tx.pedido.findFirst({
+    where: { id, pasteleria_id: pasteleriaId },
+    include: detalleInclude,
   });
 }
 
