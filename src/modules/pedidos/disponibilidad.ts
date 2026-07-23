@@ -1,4 +1,4 @@
-import { EstadoPedido } from "@/generated/prisma/enums";
+import { EstadoPedido, TipoEntrega } from "@/generated/prisma/enums";
 
 /**
  * Reglas puras de disponibilidad de entregas a domicilio (S4-008).
@@ -34,6 +34,35 @@ export const ESTADOS_BLOQUEAN_DISPONIBILIDAD: readonly EstadoPedido[] = [
   EstadoPedido.en_preparacion,
   EstadoPedido.listo_para_entregar,
 ];
+
+/**
+ * ¿El estado del pedido bloquea disponibilidad? Solo los estados ACTIVOS de
+ * `ESTADOS_BLOQUEAN_DISPONIBILIDAD` (cotización, confirmado, en_preparación,
+ * listo_para_entregar). `entregado` y `cancelado` devuelven `false`.
+ */
+export function esEstadoBloqueanteDisponibilidad(estado: EstadoPedido): boolean {
+  return ESTADOS_BLOQUEAN_DISPONIBILIDAD.includes(estado);
+}
+
+/**
+ * Regla pura de bloqueo de disponibilidad (S4-008/S4-009): un pedido bloquea la
+ * ventana operativa de reparto SOLO si es a domicilio Y está en un estado
+ * activo. Devuelve `false` para recolección en sucursal (nunca consume ventana,
+ * aunque esté en un estado activo) y para pedidos cancelados/entregados.
+ *
+ * Es la misma condición que aplica el filtro del repositorio
+ * (`findBloqueosDomicilioPorFecha`: `tipo_entrega = domicilio` + estados
+ * activos), expresada como función pura para poder probarla sin base de datos.
+ */
+export function pedidoBloqueaDisponibilidad(
+  tipoEntrega: TipoEntrega,
+  estado: EstadoPedido,
+): boolean {
+  return (
+    tipoEntrega === TipoEntrega.domicilio &&
+    esEstadoBloqueanteDisponibilidad(estado)
+  );
+}
 
 // Mismo formato "HH:mm" en 24h que valida el schema de pedidos (HORA_REGEX).
 const HORA_MINUTOS_REGEX = /^([01]\d|2[0-3]):([0-5]\d)$/;

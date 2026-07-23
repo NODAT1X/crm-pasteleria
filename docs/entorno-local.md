@@ -134,6 +134,33 @@ npm run lint
 
 Este comando ejecuta las validaciones configuradas con ESLint.
 
+### Ejecutar pruebas automatizadas
+
+```bash
+npm test
+```
+
+Ejecuta la suite de pruebas con Vitest en entorno Node (una sola pasada). Para
+ejecutarla en modo interactivo (re-corre al guardar) durante el desarrollo:
+
+```bash
+npm run test:watch
+```
+
+Estas son **pruebas mínimas de reglas críticas de negocio** (S5-003), no una
+suite completa. Cubren funciones puras, sin tocar la base de datos:
+
+- **Disponibilidad** (`src/modules/pedidos/disponibilidad.test.ts`): ventana de
+  30 minutos direccional para entregas a domicilio, mensaje de conflicto y
+  estados que bloquean disponibilidad.
+- **Estados del pedido** (`src/validation/estados-pedido.test.ts`): transiciones
+  válidas del ciclo de vida, estados finales y transiciones inválidas.
+- **Reglas financieras** (`src/modules/pagos/reglas-financieras.test.ts`): total
+  pagado, saldo pendiente (nunca negativo), anti‑sobrepago, anticipo mínimo del
+  50% para confirmar, estado de pago y retención/devolución de cancelación.
+
+No requieren base de datos, credenciales ni `.env`: solo prueban lógica pura.
+
 ### Generar build de producción
 
 ```bash
@@ -248,6 +275,7 @@ Antes de abrir un Pull Request, validar lo siguiente:
 - [ ] El proyecto levanta con `npm run dev`.
 - [ ] El proyecto compila con `npm run build`.
 - [ ] El lint se ejecuta con `npm run lint`.
+- [ ] Las pruebas de reglas críticas pasan con `npm test`.
 - [ ] Si aplica, Prisma valida correctamente con `npx prisma validate`.
 
 ## Advertencias conocidas del entorno local

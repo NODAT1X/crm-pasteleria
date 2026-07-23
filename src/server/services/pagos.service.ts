@@ -19,6 +19,10 @@ import {
   type PedidoFinancieroPayload,
 } from "@/server/repositories/movimientos-financieros.repository";
 import {
+  calcularSaldoPendiente,
+  validarMontoPago,
+} from "@/modules/pagos/reglas-financieras";
+import {
   anularMovimientoFinancieroSchema,
   pedidoFinancieroQuerySchema,
   registrarPagoSchema,
@@ -225,8 +229,8 @@ function buildResumen(
   movimientosAplicados: MovimientoFinanciero[],
 ): ResumenFinancieroPedido {
   const totalPagado = sumarPagosAplicados(movimientosAplicados);
-  const saldo = pedido.total.minus(totalPagado);
-  const saldoPendiente = saldo.isNegative() ? DECIMAL_CERO : saldo;
+  // Regla pura reutilizada (S5-003): saldo = total - pagado, clamp a 0.
+  const saldoPendiente = calcularSaldoPendiente(pedido.total, totalPagado);
 
   return {
     pedido_id: pedido.id,
@@ -546,13 +550,15 @@ export async function registrarPagoService(
         const totalPagado = sumarPagosAplicados(aplicados);
         const saldo = pedido.total.minus(totalPagado);
 
-        // Regla: sin sobrepagos. El saldo es la cota superior del pago.
-        if (saldo.lessThanOrEqualTo(0)) {
-          throw new PagoServiceError(
-            "El pedido ya está pagado por completo; no admite más pagos.",
-          );
-        }
-        if (montoDecimal.greaterThan(saldo)) {
+        // Regla: sin sobrepagos. El saldo es la cota superior del pago. La regla
+        // pura (S5-003) decide; aquí se traduce el motivo al mensaje en español.
+        const validacion = validarMontoPago(montoDecimal, saldo);
+        if (!validacion.ok) {
+          if (validacion.motivo === "pedido_pagado") {
+            throw new PagoServiceError(
+              "El pedido ya está pagado por completo; no admite más pagos.",
+            );
+          }
           throw new PagoServiceError(
             `El pago excede el saldo pendiente del pedido ($${saldo.toFixed(2)}). No se permiten sobrepagos.`,
           );
