@@ -11,8 +11,8 @@ export default function DashboardPage() {
         </p>
 
         <p className="mt-2 text-sm text-muted-foreground">
-          Desde aquí el administrador podrá navegar hacia Clientes y futuras
-          secciones del Sprint 1.
+          Desde aquí el administrador puede navegar hacia Clientes, Pedidos y
+          Entregas.
         </p>
       </div>
     </section>

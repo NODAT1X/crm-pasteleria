@@ -27,7 +27,7 @@ Existen dos capas, con responsabilidades distintas:
 
 | Capa | Archivo | Qué hace | ¿Es seguridad? |
 |---|---|---|---|
-| Middleware (Edge) | `src/proxy.ts` | Redirección **optimista** por presencia de cookie. E| Middleware (Edge) | `src/proxy.ts` | Redirección **optimista** por presencia de cookie. Si una ruta interna no tiene cookie de sesión, redirige a `/login`. | **No.** Solo UX. No valida la cookie. | | **No.** Solo UX. No valida la cookie. |
+| Middleware (Edge) | `src/proxy.ts` | Redirección **optimista** por presencia de cookie. Si una ruta interna no tiene cookie de sesión, redirige a `/login`. Ayuda a la navegación/UX, pero no sustituye la autorización real del servidor. | **No.** Solo UX. No valida la cookie. |
 | Servidor (RSC) | `src/server/auth/authorization.ts` | Valida sesión + usuario real en BD (activo, rol admin, con pastelería). | **Sí.** Fuente autoritativa. |
 
 > La cookie del middleware no se verifica (firma, expiración, estado del usuario).
@@ -79,20 +79,22 @@ Ambas están **memoizadas por petición** con `React.cache`: aunque el layout y 
 página las llamen en el mismo request, la sesión y la consulta a BD se resuelven
 una sola vez.
 
-### Ejemplo en una página
+### Ejemplo en el layout protegido
 
 ```tsx
-// src/app/(dashboard)/dashboard/page.tsx
+// src/app/(dashboard)/layout.tsx
 import { requireAdminContext } from "@/server/auth/authorization";
 
 export const dynamic = "force-dynamic";
 
-export default async function DashboardPage() {
+export default async function DashboardLayout({ children }) {
   const admin = await requireAdminContext();
   // admin.userId, admin.email, admin.nombre, admin.rol, admin.pasteleriaId
-  return <p>Sesión iniciada como {admin.email}</p>;
+  // ... renderiza header con admin.nombre y children
 }
 ```
+
+Como el chequeo ya ocurre en el layout, las páginas dentro de `(dashboard)` (por ejemplo `src/app/(dashboard)/dashboard/page.tsx`) no necesitan volver a llamar `requireAdminContext()`: ya se ejecutan protegidas. Solo deben llamarla de nuevo si necesitan datos del `AdminContext` (como `pasteleriaId` para una consulta propia).
 
 ---
 
@@ -142,45 +144,61 @@ async function listarClientes() {
 
 ---
 
-## 5. Ejemplo futuro: consulta Prisma filtrada por `pasteleria_id`
+## 5. Patrón vigente: consulta Prisma filtrada por `pasteleria_id`
 
-Cuando se implemente el CRUD (fuera del alcance de S1-005), toda consulta a datos
-del tenant debe filtrar por el `pasteleriaId` del contexto. Ejemplo ilustrativo:
+El CRUD de clientes ya está implementado y sigue este patrón en tres capas
+(acción → servicio → repositorio). Los archivos reales son:
+
+- `src/modules/clientes/actions.ts` — Server Actions que llaman
+  `requireAdminContext()` una sola vez y pasan `pasteleriaId` hacia la capa de
+  servicio.
+- `src/server/repositories/clientes.repository.ts` — única capa que habla con
+  Prisma; recibe `pasteleriaId` ya resuelto como parámetro (vía el servicio) y
+  nunca llama a `requireAdminContext()` por sí misma.
+
+Ejemplo simplificado del patrón, tomado del código real:
 
 ```ts
+// src/modules/clientes/actions.ts
 import { requireAdminContext } from "@/server/auth/authorization";
+import { listClientesService } from "@/server/services/clientes.service";
+
+export async function listClientesAction(params) {
+  const { pasteleriaId } = await requireAdminContext();
+
+  // pasteleriaId viaja como parámetro explícito, nunca como input del cliente.
+  return listClientesService(pasteleriaId, params);
+}
+```
+
+```ts
+// src/server/repositories/clientes.repository.ts
 import { prisma } from "@/server/db/prisma";
 
-// Server Action / RSC dentro del grupo (dashboard)
-export async function listarClientes() {
-  const { pasteleriaId } = await requireAdminContext();
-
-  // El WHERE incluye SIEMPRE pasteleria_id: aislamiento por tenant.
-  return prisma.cliente.findMany({
-    where: {
-      pasteleria_id: pasteleriaId, // <- del contexto, no del cliente
-      activo: true,
-    },
-    orderBy: { nombre: "asc" },
-  });
-}
-
-// En escritura, el tenant también se fija desde el contexto:
-export async function crearCliente(input: { nombre: string; telefono?: string }) {
-  const { pasteleriaId } = await requireAdminContext();
+export async function createCliente(params: {
+  pasteleriaId: string;
+  data: { nombre: string; telefono: string | null /* ... */ };
+}) {
+  const { pasteleriaId, data } = params;
 
   return prisma.cliente.create({
     data: {
-      nombre: input.nombre,
-      telefono: input.telefono,
-      pasteleria_id: pasteleriaId, // <- nunca desde `input`
+      ...data,
+      // Tenant SIEMPRE desde el contexto admin, nunca desde el input.
+      pasteleria_id: pasteleriaId,
     },
   });
 }
 ```
 
+La capa de servicio (`src/server/services/clientes.service.ts`), omitida aquí
+por brevedad, valida la entrada con Zod y aplica reglas de negocio antes de
+llamar al repositorio; nunca toma `pasteleriaId` del input de negocio.
+
 Regla práctica: **`pasteleria_id` nunca sale de `input`; siempre sale del
-`AdminContext`.**
+`AdminContext`, resuelto una vez en la acción y propagado explícitamente por
+servicio y repositorio.** Los módulos de pedidos y pagos siguen el mismo
+patrón de tres capas.
 
 ---
 

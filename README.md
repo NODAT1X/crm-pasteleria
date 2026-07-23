@@ -4,7 +4,7 @@ CRM Pastelería es un sistema web desarrollado por Nodatix para apoyar la gesti�
 
 El proyecto centraliza información clave del negocio: clientes, pedidos personalizados, movimientos financieros (pagos, anticipos, saldos pendientes) y calendario operativo de entregas.
 
-> Este README documenta el estado técnico y funcional real del proyecto al cierre de los Bloques 1 y 2 del Sprint 4. No es un manual de usuario final ni sustituye al Documento Maestro del proyecto.
+> Este README documenta el estado técnico y funcional real del proyecto tras el cierre del Sprint 4 (Bloques 1 y 2), con Sprint 5 actualmente en curso. No es un manual de usuario final ni sustituye al Documento Maestro del proyecto.
 
 ## Descripción del proyecto
 
@@ -26,9 +26,11 @@ El `README.md` documenta el estado técnico y funcional real del repositorio, pe
 
 ## Estado actual del MVP
 
-El proyecto se encuentra en desarrollo activo del MVP. Al cierre de los Bloques 1 y 2 del Sprint 4, el sistema ya opera de forma funcional sobre una base de datos real (PostgreSQL + Prisma), con autenticación, aislamiento por pastelería y los módulos de clientes, pedidos, pagos y calendario operativo implementados y verificables en el código.
+El proyecto se encuentra en desarrollo activo del MVP. El Sprint 4 (Bloques 1 y 2) está cerrado: el sistema opera de forma funcional sobre una base de datos real (PostgreSQL + Prisma), con autenticación, aislamiento por pastelería y los módulos de clientes, pedidos, pagos y calendario operativo implementados y verificables en el código.
 
-Este README no afirma que todo el Sprint 4 esté cerrado ni describe el contenido de bloques futuros del sprint: solo documenta lo que existe hoy en la rama.
+Sprint 5 está en curso, con foco en la automatización de pedidos y el seguimiento por WhatsApp. Como parte de este trabajo ya existen: una base documental actualizada (Documento Maestro), pruebas automatizadas mínimas sobre reglas críticas, protección de concurrencia para la disponibilidad y una política documental sobre eliminación de datos reales y WhatsApp. La automatización de pedidos y el seguimiento por WhatsApp en sí son objetivos planeados de Sprint 5, todavía no implementados.
+
+Este README no afirma que Sprint 5 esté cerrado ni describe funcionalidad de WhatsApp como implementada: solo documenta lo que existe hoy en la rama.
 
 ## Funcionalidades implementadas y verificadas
 
@@ -41,6 +43,7 @@ Las siguientes funcionalidades están respaldadas por código, modelos de datos 
 - **Total, monto pagado y saldo pendiente**: calculados en el servidor a partir de los movimientos financieros aplicados, visibles en el detalle del pedido, en el listado y en la agenda.
 - **Eliminación definitiva de pedidos**: acción de eliminar disponible desde el listado de pedidos, con confirmación (simple o reforzada según el estado y si el pedido tiene movimientos financieros asociados). Bajo las reglas actuales del MVP, esta eliminación es **definitiva** (no es soft delete) y remueve el pedido junto con sus artículos y movimientos financieros relacionados, sin dejar registros huérfanos. Ver `docs/politica-pedidos-sprint-4.md`.
 - **Validación de disponibilidad**: las entregas a domicilio en estado activo bloquean una ventana operativa de 30 minutos a partir de la hora seleccionada; las recolecciones en sucursal no bloquean horario. Pedidos cancelados o eliminados liberan la disponibilidad. Ver `docs/reglas-disponibilidad-calendario-sprint-4.md`.
+- **Protección de disponibilidad ante escrituras concurrentes**: al crear o editar un pedido a domicilio, la validación de disponibilidad y la escritura ocurren dentro de una misma transacción con bloqueo por pastelería y fecha, evitando doble reserva de una misma ventana horaria. No cambia la regla de 30 minutos ni los estados bloqueantes. Ver `docs/qa-s5-004-concurrencia-disponibilidad.md`.
 - **Calendario operativo diario y semanal**: vistas de entregas por día y por semana (lunes a domingo), con navegación directa al detalle de cada pedido.
 - **Filtros por estado y tipo de entrega**: disponibles tanto en el calendario diario como en el semanal.
 - **Agenda de próximos pedidos**: resumen agrupado por día de los pedidos activos más próximos, visible desde el listado de pedidos.
@@ -55,7 +58,7 @@ Estas funcionalidades forman parte del alcance conceptual del MVP pero **no est�
 - Catálogo de productos frecuentes.
 - Gestión completa de usuarios y roles (hoy solo existe un único rol funcional: administrador).
 - Dashboard operativo con indicadores (hoy la pantalla de inicio es un marcador de posición sin métricas).
-- Seguimiento manual por WhatsApp mediante enlaces `wa.me` y plantillas.
+- **Automatización de pedidos y seguimiento por WhatsApp**: enfoque funcional planeado para Sprint 5 (entrada guiada de pedidos, seguimiento del estado, mensajes operativos). No existe todavía integración técnica con WhatsApp, API oficial, chatbot ni automatización de mensajería. El campo `whatsapp` de clientes es únicamente información de contacto y no debe interpretarse como una integración. Ver `docs/documento-maestro-crm-pasteleria.md` (secciones 14 y 15) y `docs/politica-eliminacion-datos-reales-whatsapp.md`.
 
 ## Fuera de alcance actual
 
@@ -159,6 +162,8 @@ npm run dev                              # Levanta el servidor de desarrollo (ht
 npm run build                            # Genera el build de producción (ejecuta `prisma generate` antes)
 npm run start                            # Ejecuta el build de producción (después de `npm run build`)
 npm run lint                             # Ejecuta las validaciones de ESLint
+npm test                                 # Ejecuta la suite de pruebas con Vitest (una sola pasada)
+npm run test:watch                       # Ejecuta las pruebas en modo interactivo (re-corre al guardar)
 npm run prisma:generate                  # Genera el cliente de Prisma
 npx prisma validate                      # Valida el esquema de Prisma
 npx prisma format                        # Formatea el esquema de Prisma
@@ -220,8 +225,9 @@ Antes de abrir un Pull Request, se espera validar:
 
 - `npm run lint` sin errores.
 - `npm run build` compilando correctamente.
+- `npm test` sin fallos (pruebas mínimas de reglas críticas: disponibilidad, estados de pedido y reglas financieras).
 - `npx prisma validate` cuando se modifica el esquema de Prisma.
-- Revisión manual de la funcionalidad afectada (el proyecto no cuenta con una suite de pruebas automatizada).
+- Revisión manual de la funcionalidad afectada. `npm test` cubre reglas críticas de negocio con pruebas unitarias sobre funciones puras; no sustituye la validación manual de flujos completos ni pruebas end-to-end, que no existen todavía.
 
 Checklist completo en `docs/checklist-qa-dod.md`.
 
@@ -235,7 +241,9 @@ La carpeta `docs/` contiene el detalle funcional y técnico por sprint, entre ot
 - `docs/entorno-local.md` — configuración detallada del entorno local.
 - `docs/reglas-clientes-admin-sprint-1.md`, `docs/reglas-pedidos-sprint-2.md`, `docs/reglas-pagos-sprint-3.md` — reglas funcionales por módulo.
 - `docs/politica-pedidos-sprint-4.md` y `docs/reglas-disponibilidad-calendario-sprint-4.md` — política de eliminación/cancelación y reglas de disponibilidad del calendario.
-- `docs/qa-cierre-sprint-1.md`, `docs/qa-cierre-sprint-2.md`, `docs/qa-cierre-sprint-3.md`, `docs/qa-s4-010-disponibilidad-editar-cancelar-pedido.md` — evidencia de cierre y QA por sprint.
+- `docs/qa-cierre-sprint-1.md`, `docs/qa-cierre-sprint-2.md`, `docs/qa-cierre-sprint-3.md`, `docs/qa-s4-010-disponibilidad-editar-cancelar-pedido.md`, [`docs/qa-cierre-sprint-4-bloques-1-2.md`](docs/qa-cierre-sprint-4-bloques-1-2.md) — evidencia de cierre y QA por sprint.
+- [`docs/qa-s5-004-concurrencia-disponibilidad.md`](docs/qa-s5-004-concurrencia-disponibilidad.md) — protección de disponibilidad ante escrituras concurrentes.
+- [`docs/politica-eliminacion-datos-reales-whatsapp.md`](docs/politica-eliminacion-datos-reales-whatsapp.md) — política de eliminación para datos reales y pedidos originados por WhatsApp, base de planeación de Sprint 5.
 
 > Este README resume el estado técnico y funcional del proyecto; no sustituye ni repite el detalle de estos documentos.
 
@@ -244,7 +252,7 @@ La carpeta `docs/` contiene el detalle funcional y técnico por sprint, entre ot
 La definición funcional completa, el alcance del MVP y las decisiones principales del proyecto deben consultarse en el Documento Maestro oficial:
 
 ```text
-Documento Maestro CRM Pastelería Nodatix v1.1
+docs/documento-maestro-crm-pasteleria.md
 ```
 
 > **Este README no sustituye un manual de usuario final.** Es un documento de entrada técnico y funcional para el equipo de desarrollo.
