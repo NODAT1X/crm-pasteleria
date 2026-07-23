@@ -12,6 +12,18 @@ El proyecto consiste en una aplicación web interna de gestión operativa tipo b
 
 Aunque puede presentarse comercialmente como un CRM para pastelerías, su función principal es ayudar al negocio a controlar pedidos, clientes, pagos y entregas desde un solo lugar, con acceso exclusivo para el administrador del negocio.
 
+## Documento Maestro
+
+La fuente oficial del Documento Maestro del CRM Pastelería vive en:
+
+```txt
+docs/documento-maestro-crm-pasteleria.md
+```
+
+Este archivo concentra la visión funcional, alcance, reglas generales, decisiones de producto y relación con documentos complementarios del proyecto.
+
+El `README.md` documenta el estado técnico y funcional real del repositorio, pero no reemplaza al Documento Maestro.
+
 ## Estado actual del MVP
 
 El proyecto se encuentra en desarrollo activo del MVP. Al cierre de los Bloques 1 y 2 del Sprint 4, el sistema ya opera de forma funcional sobre una base de datos real (PostgreSQL + Prisma), con autenticación, aislamiento por pastelería y los módulos de clientes, pedidos, pagos y calendario operativo implementados y verificables en el código.
@@ -240,3 +252,7 @@ Documento Maestro CRM Pastelería Nodatix v1.1
 ## Equipo
 
 Proyecto desarrollado por Nodatix.
+
+
+
+
