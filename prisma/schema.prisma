@@ -121,6 +121,16 @@ model Verification {
   @@map("verifications")
 }
 
+// Origen del cliente (S5-009): distingue clientes capturados manualmente por el
+// administrador de los originados desde WhatsApp. Consistente con `OrigenPedido`
+// (S5-008); `whatsapp` solo lo fija código de servidor autorizado.
+enum OrigenCliente {
+  manual
+  whatsapp
+
+  @@map("origen_cliente")
+}
+
 // Clientes de la pastelería. Eliminación lógica vía `activo`.
 model Cliente {
   id            String   @id @default(cuid())
@@ -131,7 +141,15 @@ model Cliente {
   email         String?
   direccion     String?
   notas         String?
+  // Baja lógica (soft-delete). NO representa revisión: un cliente preliminar
+  // queda `activo = true` para poder asociarse a una cotización sin bloqueo.
   activo        Boolean  @default(true)
+  // Origen del cliente (S5-009). Default `manual` para conservar compatibilidad.
+  origen_cliente     OrigenCliente @default(manual)
+  // Indicador de revisión pendiente (S5-009), ORTOGONAL a `activo`: un cliente
+  // preliminar desde WhatsApp queda `true` para que el dueño lo revise; no
+  // bloquea la cotización. Default `false` para los clientes existentes.
+  revision_pendiente Boolean       @default(false)
   created_at    DateTime @default(now())
   updated_at    DateTime @updatedAt
 
@@ -143,6 +161,10 @@ model Cliente {
   @@index([pasteleria_id, activo])
   // Búsqueda/orden por nombre dentro del tenant.
   @@index([pasteleria_id, nombre])
+  // Deduplicación por contacto dentro del tenant (S5-009): la captura preliminar
+  // busca coincidencias evidentes por WhatsApp y por teléfono.
+  @@index([pasteleria_id, whatsapp])
+  @@index([pasteleria_id, telefono])
   @@map("clientes")
 }
 

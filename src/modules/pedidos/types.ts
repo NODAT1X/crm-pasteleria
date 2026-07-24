@@ -3,6 +3,7 @@ import type { z } from "zod";
 import type { Cliente } from "@/generated/prisma/client";
 import type {
   EstadoPedido,
+  OrigenCliente,
   OrigenPedido,
   TipoEntrega,
 } from "@/generated/prisma/enums";
@@ -61,6 +62,10 @@ export type ClienteResumenDTO = {
   nombre: string;
   telefono: string | null;
   whatsapp: string | null;
+  // Origen y revisión del cliente (S5-009): permiten que la vista de pedidos
+  // muestre que un cliente originado por WhatsApp requiere revisión del dueño.
+  origen_cliente: OrigenCliente;
+  revision_pendiente: boolean;
 };
 
 // Campos de un pedido comunes a listado y detalle (dinero como `number`).

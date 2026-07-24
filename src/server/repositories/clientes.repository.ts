@@ -1,5 +1,6 @@
 import { Prisma } from "@/generated/prisma/client";
 import type { Cliente } from "@/generated/prisma/client";
+import type { OrigenCliente } from "@/generated/prisma/enums";
 import { prisma } from "@/server/db/prisma";
 
 /**
@@ -14,7 +15,9 @@ import { prisma } from "@/server/db/prisma";
  */
 
 // Datos aceptados al crear. `pasteleria_id` se inyecta aparte desde el contexto,
-// nunca forma parte de la entrada de negocio.
+// nunca forma parte de la entrada de negocio. `origen_cliente` y
+// `revision_pendiente` (S5-009) los fija SIEMPRE el servicio (valores de
+// confianza), nunca el input del formulario.
 type CreateClienteData = {
   nombre: string;
   telefono: string | null;
@@ -22,6 +25,8 @@ type CreateClienteData = {
   email: string | null;
   direccion: string | null;
   notas: string | null;
+  origen_cliente: OrigenCliente;
+  revision_pendiente: boolean;
 };
 
 // Datos aceptados al actualizar. `pasteleria_id` NO es actualizable: se omite a
@@ -77,6 +82,43 @@ export async function listClientes(params: {
     orderBy: { nombre: "asc" },
     take,
     skip,
+  });
+}
+
+/**
+ * Clientes del tenant cuyo `whatsapp` o `telefono` coincide EXACTAMENTE con
+ * alguno de los contactos capturados (S5-009). Se usa para la deduplicación de
+ * la captura preliminar desde WhatsApp. Devuelve clientes ACTIVOS e INACTIVOS
+ * (la decisión de qué hacer con cada caso vive en `resolverClientePreliminar`).
+ *
+ * Match exacto sobre los strings ya recortados; sin normalización avanzada de
+ * teléfonos (issue futura). Cada contacto capturado se compara contra AMBOS
+ * campos (`whatsapp` y `telefono`) del cliente, porque el mismo número puede
+ * estar guardado en cualquiera de los dos.
+ */
+export async function findClientesByContacto(params: {
+  pasteleriaId: string;
+  whatsapp: string | null;
+  telefono: string | null;
+}): Promise<Cliente[]> {
+  const { pasteleriaId, whatsapp, telefono } = params;
+
+  const contactos = [whatsapp, telefono].filter(
+    (contacto): contacto is string => contacto !== null && contacto.length > 0,
+  );
+  const distintos = [...new Set(contactos)];
+  if (distintos.length === 0) {
+    return [];
+  }
+
+  const or: Prisma.ClienteWhereInput[] = distintos.flatMap((contacto) => [
+    { whatsapp: contacto },
+    { telefono: contacto },
+  ]);
+
+  return prisma.cliente.findMany({
+    where: { pasteleria_id: pasteleriaId, OR: or },
+    orderBy: { created_at: "asc" },
   });
 }
 
