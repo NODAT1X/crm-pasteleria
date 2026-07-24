@@ -18,6 +18,7 @@ import {
   runMovimientosFinancierosTransaction,
   type PedidoFinancieroPayload,
 } from "@/server/repositories/movimientos-financieros.repository";
+import { evaluarBloqueoPagoPorCotizar } from "@/modules/pedidos/cotizacion-pendiente";
 import {
   calcularSaldoPendiente,
   validarMontoPago,
@@ -539,6 +540,20 @@ export async function registrarPagoService(
           throw new PagoServiceError(
             "No se pueden registrar pagos en un pedido cancelado.",
           );
+        }
+
+        // Regla S5-010: no se puede registrar un pago mientras el pedido tenga un
+        // producto por cotizar o su total no esté cotizado (0 o menor). Va ANTES
+        // del cálculo de saldo: con total 0 el saldo es 0 y el anti-sobrepago
+        // respondería "ya pagado", un mensaje engañoso para una cotización
+        // pendiente. La bandera y el total se leen de la BD dentro de la
+        // transacción; nada llega del frontend.
+        const bloqueoCotizacion = evaluarBloqueoPagoPorCotizar({
+          tieneItemPorCotizar: pedido.tiene_item_por_cotizar,
+          totalNoCotizado: pedido.total.lessThanOrEqualTo(0),
+        });
+        if (bloqueoCotizacion.bloqueado) {
+          throw new PagoServiceError(bloqueoCotizacion.motivo);
         }
 
         const aplicados = await findMovimientosAplicadosByPedido({

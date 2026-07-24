@@ -7,6 +7,7 @@ import type {
   TipoMovimientoPago,
   TipoPago,
 } from "@/generated/prisma/enums";
+import { PRODUCTO_POR_COTIZAR_ID } from "@/modules/pedidos/cotizacion-pendiente";
 import { prisma } from "@/server/db/prisma";
 
 /**
@@ -87,6 +88,10 @@ export type PedidoFinancieroPayload = {
   id: string;
   total: Prisma.Decimal;
   estado_pedido: EstadoPedido;
+  // S5-010: `true` si el pedido conserva el item genérico "por cotizar". Permite
+  // a la capa de servicio bloquear confirmación y registro de pago sin una
+  // consulta adicional (se resuelve en la misma lectura financiera).
+  tiene_item_por_cotizar: boolean;
 };
 
 /**
@@ -96,6 +101,11 @@ export type PedidoFinancieroPayload = {
  * total dentro de la MISMA transacción que los movimientos. `estado_pedido`
  * permite bloquear pagos en pedidos cancelados (S3-019). Devuelve `null` si el
  * pedido no existe o pertenece a otro tenant.
+ *
+ * S5-010: incluye en el MISMO select un sondeo acotado (`take: 1`) de items con
+ * `producto_id = PRODUCTO_POR_COTIZAR_ID` para derivar `tiene_item_por_cotizar`.
+ * Ambos flujos que ya usan esta lectura (confirmación en pedidos.service y
+ * registro de pago en pagos.service) obtienen la bandera sin una query extra.
  */
 export async function findPedidoFinanciero(params: {
   pasteleriaId: string;
@@ -104,10 +114,31 @@ export async function findPedidoFinanciero(params: {
 }): Promise<PedidoFinancieroPayload | null> {
   const { pasteleriaId, pedidoId, db = prisma } = params;
 
-  return db.pedido.findFirst({
+  const pedido = await db.pedido.findFirst({
     where: { id: pedidoId, pasteleria_id: pasteleriaId },
-    select: { id: true, total: true, estado_pedido: true },
+    select: {
+      id: true,
+      total: true,
+      estado_pedido: true,
+      // Sondeo acotado: basta saber si existe AL MENOS un item por cotizar.
+      items: {
+        where: { producto_id: PRODUCTO_POR_COTIZAR_ID },
+        select: { id: true },
+        take: 1,
+      },
+    },
   });
+
+  if (!pedido) {
+    return null;
+  }
+
+  return {
+    id: pedido.id,
+    total: pedido.total,
+    estado_pedido: pedido.estado_pedido,
+    tiene_item_por_cotizar: pedido.items.length > 0,
+  };
 }
 
 // --- Consultas de movimientos ---------------------------------------------------
