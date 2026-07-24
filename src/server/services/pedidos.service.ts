@@ -15,6 +15,11 @@ import {
   mensajeConflictoDisponibilidad,
   type ConflictoDisponibilidad,
 } from "@/modules/pedidos/disponibilidad";
+import {
+  MENSAJE_ITEM_POR_COTIZAR_NO_PERMITIDO_MANUAL,
+  evaluarBloqueoConfirmacionPorCotizar,
+  itemPorCotizarPermitido,
+} from "@/modules/pedidos/cotizacion-pendiente";
 import { hoyFechaOperativaLocal } from "@/modules/pedidos/fecha-operativa";
 import { findClienteById } from "@/server/repositories/clientes.repository";
 import {
@@ -463,7 +468,7 @@ export async function verificarDisponibilidadEntregaService(
 export async function createPedidoService(
   pasteleriaId: string,
   input: unknown,
-  options?: { origenPedido?: OrigenPedido },
+  options?: { origenPedido?: OrigenPedido; permitirItemPorCotizar?: boolean },
 ): Promise<PedidoDetalleDTO> {
   const parsed = createPedidoSchema.safeParse(input);
   if (!parsed.success) {
@@ -474,6 +479,19 @@ export async function createPedidoService(
   // formulario. El default es `manual`; solo código de servidor autorizado
   // (flujo WhatsApp futuro) puede pasar `OrigenPedido.whatsapp` por `options`.
   const origenPedido = options?.origenPedido ?? OrigenPedido.manual;
+
+  // Guard S5-010: el item genérico "por cotizar" es CONTROLADO. Solo el flujo
+  // autorizado (que pasa `permitirItemPorCotizar: true`) puede crearlo; el
+  // formulario manual nunca envía esa opción, así que no puede inyectar el
+  // centinela en `producto_id`.
+  if (
+    !itemPorCotizarPermitido({
+      items: parsed.data.items,
+      permitirItemPorCotizar: options?.permitirItemPorCotizar ?? false,
+    })
+  ) {
+    throw new PedidoServiceError(MENSAJE_ITEM_POR_COTIZAR_NO_PERMITIDO_MANUAL);
+  }
 
   // Regla: el cliente debe existir, ser del tenant y estar activo.
   await assertClienteAsignable(pasteleriaId, parsed.data.cliente_id);
@@ -815,6 +833,7 @@ export async function updatePedidoService(
   pasteleriaId: string,
   id: string,
   input: unknown,
+  options?: { permitirItemPorCotizar?: boolean },
 ): Promise<PedidoDetalleDTO> {
   const parsedId = pedidoIdSchema.safeParse(id);
   if (!parsedId.success) {
@@ -827,6 +846,20 @@ export async function updatePedidoService(
   }
 
   const data = parsed.data;
+
+  // Guard S5-010: si la edición reemplaza items, el formulario manual no puede
+  // (re)introducir el item genérico "por cotizar" (mismo criterio que la
+  // creación). El REEMPLAZO por items reales sí queda permitido: sin centinela,
+  // `itemPorCotizarPermitido` devuelve true y el dueño continúa el flujo normal.
+  if (
+    data.items !== undefined &&
+    !itemPorCotizarPermitido({
+      items: data.items,
+      permitirItemPorCotizar: options?.permitirItemPorCotizar ?? false,
+    })
+  ) {
+    throw new PedidoServiceError(MENSAJE_ITEM_POR_COTIZAR_NO_PERMITIDO_MANUAL);
+  }
 
   // Regla S2-009 / S3-019: los pedidos en estado final (entregado o cancelado)
   // no se pueden editar. Este guard protege la Server Action ante llamadas
@@ -988,6 +1021,22 @@ export async function changeEstadoPedidoService(
         );
         if (!transicion.ok) {
           throw new PedidoServiceError(transicion.error);
+        }
+
+        // Regla S5-010: no se puede confirmar un pedido que conserva un producto
+        // por cotizar o cuyo total aún no está cotizado (0 o menor). Se evalúa
+        // ANTES del anticipo del 50%: con total 0 ese 50% es 0 y la regla de
+        // anticipo no bloquearía (hueco que esta issue cierra). `total` y la
+        // bandera `tiene_item_por_cotizar` se leen de la BD dentro de la
+        // transacción; nada llega del frontend.
+        if (estado_pedido === EstadoPedido.confirmado) {
+          const bloqueo = evaluarBloqueoConfirmacionPorCotizar({
+            tieneItemPorCotizar: actual.tiene_item_por_cotizar,
+            totalNoCotizado: actual.total.lessThanOrEqualTo(0),
+          });
+          if (bloqueo.bloqueado) {
+            throw new PedidoServiceError(bloqueo.motivo);
+          }
         }
 
         // Regla S3-018: pasar de `cotizacion` a `confirmado` exige un anticipo
