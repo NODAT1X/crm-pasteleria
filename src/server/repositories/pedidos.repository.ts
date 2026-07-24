@@ -1,6 +1,6 @@
 import { Prisma } from "@/generated/prisma/client";
 import { TipoEntrega } from "@/generated/prisma/enums";
-import type { EstadoPedido } from "@/generated/prisma/enums";
+import type { EstadoPedido, OrigenPedido } from "@/generated/prisma/enums";
 import { lockKeyDisponibilidad } from "@/modules/pedidos/lock-disponibilidad";
 import { prisma } from "@/server/db/prisma";
 
@@ -67,6 +67,9 @@ export type CreatePedidoData = {
   direccion_entrega: string | null;
   notas_internas: string | null;
   total: string;
+  // Origen del pedido (S5-008). Lo fija SIEMPRE el servicio (default `manual`);
+  // nunca proviene del input del formulario.
+  origen_pedido: OrigenPedido;
   items: PedidoItemPersistData[];
 };
 
@@ -183,6 +186,8 @@ export async function createPedidoWithItems(params: {
       direccion_entrega: data.direccion_entrega,
       total: data.total,
       notas_internas: data.notas_internas,
+      // Origen del pedido (S5-008): valor de confianza fijado por el servicio.
+      origen_pedido: data.origen_pedido,
       items: {
         create: data.items.map((item) => ({
           // Cada item también hereda el tenant desde el contexto.

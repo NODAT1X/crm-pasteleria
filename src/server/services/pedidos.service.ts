@@ -3,7 +3,12 @@ import { z } from "zod";
 import { Prisma } from "@/generated/prisma/client";
 import type { Cliente } from "@/generated/prisma/client";
 import type { MovimientoFinanciero } from "@/generated/prisma/client";
-import { EstadoPedido, TipoEntrega, TipoMovimientoPago } from "@/generated/prisma/enums";
+import {
+  EstadoPedido,
+  OrigenPedido,
+  TipoEntrega,
+  TipoMovimientoPago,
+} from "@/generated/prisma/enums";
 import {
   ESTADOS_BLOQUEAN_DISPONIBILIDAD,
   detectarConflictoDomicilio,
@@ -262,6 +267,7 @@ function toListItemDTO(
     direccion_entrega: pedido.direccion_entrega,
     total: pedido.total.toNumber(),
     notas_internas: pedido.notas_internas,
+    origen_pedido: pedido.origen_pedido,
     created_at: pedido.created_at,
     updated_at: pedido.updated_at,
     cliente: {
@@ -289,6 +295,7 @@ function toDetalleDTO(pedido: PedidoDetallePayload): PedidoDetalleDTO {
     direccion_entrega: pedido.direccion_entrega,
     total: pedido.total.toNumber(),
     notas_internas: pedido.notas_internas,
+    origen_pedido: pedido.origen_pedido,
     created_at: pedido.created_at,
     updated_at: pedido.updated_at,
     cliente: pedido.cliente,
@@ -454,11 +461,17 @@ export async function verificarDisponibilidadEntregaService(
 export async function createPedidoService(
   pasteleriaId: string,
   input: unknown,
+  options?: { origenPedido?: OrigenPedido },
 ): Promise<PedidoDetalleDTO> {
   const parsed = createPedidoSchema.safeParse(input);
   if (!parsed.success) {
     throw new PedidoServiceError(formatZodError(parsed.error));
   }
+
+  // Origen del pedido (S5-008): valor de CONFIANZA, nunca del input del
+  // formulario. El default es `manual`; solo código de servidor autorizado
+  // (flujo WhatsApp futuro) puede pasar `OrigenPedido.whatsapp` por `options`.
+  const origenPedido = options?.origenPedido ?? OrigenPedido.manual;
 
   // Regla: el cliente debe existir, ser del tenant y estar activo.
   await assertClienteAsignable(pasteleriaId, parsed.data.cliente_id);
@@ -474,6 +487,7 @@ export async function createPedidoService(
     direccion_entrega: parsed.data.direccion_entrega,
     notas_internas: parsed.data.notas_internas,
     total,
+    origen_pedido: origenPedido,
     items,
   };
 

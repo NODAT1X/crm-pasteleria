@@ -1,7 +1,11 @@
 import type { z } from "zod";
 
 import type { Cliente } from "@/generated/prisma/client";
-import type { EstadoPedido, TipoEntrega } from "@/generated/prisma/enums";
+import type {
+  EstadoPedido,
+  OrigenPedido,
+  TipoEntrega,
+} from "@/generated/prisma/enums";
 import type { EstadoPagoDerivado } from "@/modules/pagos/types";
 import type { ConflictoDisponibilidad } from "@/modules/pedidos/disponibilidad";
 import type {
@@ -70,6 +74,9 @@ type PedidoBaseDTO = {
   direccion_entrega: string | null;
   total: number;
   notas_internas: string | null;
+  // Origen del pedido (S5-008): `manual` o `whatsapp`. Expuesto para auditoría y
+  // filtrado futuro; es de solo lectura (el origen es inmutable tras crearse).
+  origen_pedido: OrigenPedido;
   created_at: Date;
   updated_at: Date;
 };
