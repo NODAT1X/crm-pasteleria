@@ -27,6 +27,9 @@ const clienteResumenSelect = {
   nombre: true,
   telefono: true,
   whatsapp: true,
+  // S5-009: origen/revisión del cliente para el resumen que viaja en el listado.
+  origen_cliente: true,
+  revision_pendiente: true,
 } satisfies Prisma.ClienteSelect;
 
 // Listado: pedido + resumen del cliente (sin items para no traer de más).

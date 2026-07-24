@@ -155,6 +155,57 @@ export const updateClienteSchema = z
   });
 
 /**
+ * Schema INTERNO para la captura preliminar de un cliente desde WhatsApp
+ * (S5-009). Pensado para el flujo de servidor autorizado futuro, NUNCA para el
+ * formulario público. Exige `nombre` y al menos un contacto (`whatsapp` o
+ * `telefono`); el resto es opcional. Igual que el resto de schemas, NO acepta
+ * `origen_cliente`, `revision_pendiente` ni `pasteleria_id`: esos los fija
+ * SIEMPRE el backend (Zod descarta cualquier clave desconocida del input).
+ *
+ * Los contactos se recortan (trim) vía `optionalText`; no hay normalización
+ * avanzada de teléfonos (lada, `+52`, espacios): queda como issue futura.
+ */
+export const capturarClientePreliminarSchema = z
+  .object({
+    nombre: nombreCreate,
+    telefono: optionalText(
+      z
+        .string()
+        .max(MAX_TELEFONO, `El teléfono debe tener como máximo ${MAX_TELEFONO} caracteres.`)
+        .nullable(),
+    ),
+    whatsapp: optionalText(
+      z
+        .string()
+        .max(MAX_WHATSAPP, `El WhatsApp debe tener como máximo ${MAX_WHATSAPP} caracteres.`)
+        .nullable(),
+    ),
+    email: optionalText(
+      z
+        .email("El correo electrónico no es válido.")
+        .max(MAX_EMAIL, `El correo debe tener como máximo ${MAX_EMAIL} caracteres.`)
+        .nullable(),
+    ),
+    direccion: optionalText(
+      z
+        .string()
+        .max(MAX_DIRECCION, `La dirección debe tener como máximo ${MAX_DIRECCION} caracteres.`)
+        .nullable(),
+    ),
+    notas: optionalText(
+      z
+        .string()
+        .max(MAX_NOTAS, `Las notas deben tener como máximo ${MAX_NOTAS} caracteres.`)
+        .nullable(),
+    ),
+  })
+  .refine((data) => data.whatsapp !== null || data.telefono !== null, {
+    message:
+      "Se requiere al menos un contacto (WhatsApp o teléfono) para capturar el cliente.",
+    path: ["whatsapp"],
+  });
+
+/**
  * Schema para LISTAR / BUSCAR clientes.
  *  - `search`: opcional, recortado; "" se descarta (no filtra).
  *  - `take`:   entero acotado a [1, 50] (por defecto 20).

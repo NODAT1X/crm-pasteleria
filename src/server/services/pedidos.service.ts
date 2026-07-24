@@ -275,6 +275,8 @@ function toListItemDTO(
       nombre: pedido.cliente.nombre,
       telefono: pedido.cliente.telefono,
       whatsapp: pedido.cliente.whatsapp,
+      origen_cliente: pedido.cliente.origen_cliente,
+      revision_pendiente: pedido.cliente.revision_pendiente,
     },
     total_pagado: totalPagado.toNumber(),
     saldo_pendiente: saldoPendiente.toNumber(),

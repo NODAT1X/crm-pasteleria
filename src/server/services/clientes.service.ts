@@ -1,14 +1,21 @@
 import { z } from "zod";
 
 import type { Cliente } from "@/generated/prisma/client";
+import { OrigenCliente } from "@/generated/prisma/enums";
+import {
+  resolverClientePreliminar,
+  type MotivoRevisionHumana,
+} from "@/modules/clientes/cliente-preliminar";
 import {
   createCliente,
   deactivateCliente,
   findClienteById,
+  findClientesByContacto,
   listClientes,
   updateCliente,
 } from "@/server/repositories/clientes.repository";
 import {
+  capturarClientePreliminarSchema,
   clienteIdSchema,
   createClienteSchema,
   listClientesSchema,
@@ -56,7 +63,95 @@ export async function createClienteService(
     throw new ClienteServiceError(formatZodError(parsed.error));
   }
 
-  return createCliente({ pasteleriaId, data: parsed.data });
+  // Alta MANUAL (S5-009): el origen y la revisión los fija el backend de forma
+  // explícita (`manual` / sin revisión), nunca el input del formulario.
+  return createCliente({
+    pasteleriaId,
+    data: {
+      ...parsed.data,
+      origen_cliente: OrigenCliente.manual,
+      revision_pendiente: false,
+    },
+  });
+}
+
+/**
+ * Resultado de la captura preliminar de un cliente desde WhatsApp (S5-009).
+ * Unión discriminada: reutilización de un cliente activo, creación de un cliente
+ * preliminar, o derivación a revisión humana (sin fusionar, reactivar ni
+ * confirmar identidad automáticamente).
+ */
+export type CapturaClientePreliminarResult =
+  | { tipo: "existente"; cliente: Cliente }
+  | { tipo: "preliminar_creado"; cliente: Cliente }
+  | { tipo: "revision_humana"; motivo: MotivoRevisionHumana };
+
+/**
+ * Captura preliminar de un cliente desde WhatsApp (S5-009). Flujo de CONFIANZA:
+ * pensado para ser invocado por código de servidor autorizado (un flujo WhatsApp
+ * futuro), NUNCA desde el formulario público de clientes ni desde una Server
+ * Action expuesta en esta issue.
+ *
+ * Deduplica por contacto (whatsapp/telefono) dentro del tenant y aplica las
+ * reglas puras de `resolverClientePreliminar`:
+ *  - crea un cliente preliminar (`origen_cliente = whatsapp`,
+ *    `revision_pendiente = true`, `activo = true`) cuando no hay coincidencias;
+ *  - reutiliza un cliente activo cuando hay exactamente una coincidencia activa;
+ *  - deriva a revisión humana en casos inactivos, ambiguos o de datos
+ *    insuficientes. No fusiona ni reactiva clientes automáticamente.
+ */
+export async function capturarClientePreliminarWhatsappService(
+  pasteleriaId: string,
+  input: unknown,
+): Promise<CapturaClientePreliminarResult> {
+  const parsed = capturarClientePreliminarSchema.safeParse(input);
+  if (!parsed.success) {
+    throw new ClienteServiceError(formatZodError(parsed.error));
+  }
+  const data = parsed.data;
+
+  const coincidencias = await findClientesByContacto({
+    pasteleriaId,
+    whatsapp: data.whatsapp,
+    telefono: data.telefono,
+  });
+
+  const resolucion = resolverClientePreliminar(
+    { nombre: data.nombre, whatsapp: data.whatsapp, telefono: data.telefono },
+    coincidencias.map((cliente) => ({ id: cliente.id, activo: cliente.activo })),
+  );
+
+  if (resolucion.tipo === "revision_humana") {
+    return { tipo: "revision_humana", motivo: resolucion.motivo };
+  }
+
+  if (resolucion.tipo === "existente") {
+    const cliente = coincidencias.find((c) => c.id === resolucion.clienteId);
+    // El id proviene de las coincidencias; el fallback es defensivo.
+    if (!cliente) {
+      return { tipo: "revision_humana", motivo: "ambiguo" };
+    }
+    return { tipo: "existente", cliente };
+  }
+
+  // `crear_preliminar`: cliente nuevo desde WhatsApp. Origen y revisión son
+  // valores de CONFIANZA fijados aquí; `activo = true` (default) para no
+  // bloquear una futura cotización, con `revision_pendiente = true` para el dueño.
+  const cliente = await createCliente({
+    pasteleriaId,
+    data: {
+      nombre: data.nombre,
+      telefono: data.telefono,
+      whatsapp: data.whatsapp,
+      email: data.email,
+      direccion: data.direccion,
+      notas: data.notas,
+      origen_cliente: OrigenCliente.whatsapp,
+      revision_pendiente: true,
+    },
+  });
+
+  return { tipo: "preliminar_creado", cliente };
 }
 
 export async function updateClienteService(
