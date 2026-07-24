@@ -168,6 +168,16 @@ enum TipoEntrega {
   @@map("tipo_entrega")
 }
 
+// Origen del pedido (S5-008): distingue pedidos capturados manualmente por el
+// administrador de los originados desde WhatsApp. Valores controlados; el valor
+// `whatsapp` solo lo fija código de servidor autorizado (nunca el formulario).
+enum OrigenPedido {
+  manual
+  whatsapp
+
+  @@map("origen_pedido")
+}
+
 // Pedido personalizado de la pastelería. Multi-tenant por `pasteleria_id`.
 // Agrupa uno o varios PedidoItem e inicia su ciclo como cotización.
 model Pedido {
@@ -184,6 +194,9 @@ model Pedido {
   // Dinero: Decimal (nunca Float). El total lo calcula el backend en S2-004.
   total             Decimal      @default(0) @db.Decimal(10, 2)
   notas_internas    String?
+  // Origen del pedido (S5-008). Default `manual` para conservar compatibilidad
+  // con los pedidos existentes; `whatsapp` lo fija solo el flujo autorizado.
+  origen_pedido     OrigenPedido @default(manual)
   created_at        DateTime     @default(now())
   updated_at        DateTime     @updatedAt
 
@@ -198,6 +211,10 @@ model Pedido {
   @@index([pasteleria_id, fecha_entrega])
   // Apoya vistas por estado filtradas/ordenadas por fecha dentro del tenant.
   @@index([pasteleria_id, estado_pedido, fecha_entrega])
+  // Apoya listados/auditoría por origen dentro del tenant (S5-008); por prefijo
+  // izquierdo cubre también (pasteleria_id, origen_pedido). La consulta canónica
+  // futura es "cotizaciones WhatsApp del tenant".
+  @@index([pasteleria_id, origen_pedido, estado_pedido])
   @@map("pedidos")
 }
 

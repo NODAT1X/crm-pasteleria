@@ -1,4 +1,8 @@
-import type { EstadoPedido, TipoEntrega } from "@/generated/prisma/enums";
+import type {
+  EstadoPedido,
+  OrigenPedido,
+  TipoEntrega,
+} from "@/generated/prisma/enums";
 
 /**
  * Etiquetas visibles del módulo de pedidos (única fuente de verdad).
@@ -65,6 +69,19 @@ export function getEstadoPedidoLabel(estado: EstadoPedido): string {
 /** Etiqueta visible del tipo de entrega. */
 export function getTipoEntregaLabel(tipo: TipoEntrega): string {
   return TIPO_ENTREGA_LABEL[tipo] ?? TIPO_ENTREGA_FALLBACK_LABEL;
+}
+
+// Nombre del origen del pedido (S5-008), para listados/auditoría y UI futura.
+export const ORIGEN_PEDIDO_LABEL: Record<OrigenPedido, string> = {
+  manual: "Manual",
+  whatsapp: "WhatsApp",
+};
+
+const ORIGEN_PEDIDO_FALLBACK_LABEL = "Origen no disponible";
+
+/** Etiqueta visible del origen del pedido (`manual` / `whatsapp`). */
+export function getOrigenPedidoLabel(origen: OrigenPedido): string {
+  return ORIGEN_PEDIDO_LABEL[origen] ?? ORIGEN_PEDIDO_FALLBACK_LABEL;
 }
 
 /**
